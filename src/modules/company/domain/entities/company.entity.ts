@@ -1,9 +1,13 @@
+import { LinkPageEntity } from 'src/modules/link-page/domain/entities/link-page.entity';
+import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
 import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
 import {
   Column,
   CreateDateColumn,
   DeleteDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -20,8 +24,24 @@ export class CompanyEntity {
   @Column({ name: 'email', nullable: false, unique: true })
   email!: string;
 
+  @Column({ name: 'plan_id', type: 'uuid', nullable: true })
+  planId!: string | null;
+
+  @ManyToOne(() => PlanEntity, (plan) => plan.companiesUsingPlan, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'plan_id' })
+  plan!: PlanEntity | null;
+
   @OneToMany(() => UserEntity, (user) => user.company)
   users!: UserEntity[];
+
+  @OneToMany(() => LinkPageEntity, (linkPage) => linkPage.company)
+  linkPages!: LinkPageEntity[];
+
+  @OneToMany(() => PlanEntity, (plan) => plan.company)
+  customPlans!: PlanEntity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
