@@ -1,0 +1,7 @@
+packages:
+  - "."
+allowBuilds:
+  argon2: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - globals@17.11.0
