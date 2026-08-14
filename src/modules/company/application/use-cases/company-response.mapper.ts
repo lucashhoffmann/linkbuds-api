@@ -9,6 +9,15 @@ function analyticsTierForPlan(plan: CompanyEntity['plan']) {
   return 'BASIC';
 }
 
+function customDomainEnabledForPlan(plan: CompanyEntity['plan']) {
+  return Boolean(
+    plan?.customDomainEnabled ||
+      plan?.type === PlanType.FREE ||
+      plan?.type === PlanType.AGENCY ||
+      plan?.type === PlanType.CUSTOM,
+  );
+}
+
 export function toCompanyResponse(company: CompanyEntity) {
   return {
     id: company.id,
@@ -25,7 +34,7 @@ export function toCompanyResponse(company: CompanyEntity) {
           active: company.plan.active,
           analyticsEnabled: company.plan.analyticsEnabled,
           analyticsTier: analyticsTierForPlan(company.plan),
-          customDomainEnabled: company.plan.customDomainEnabled,
+          customDomainEnabled: customDomainEnabledForPlan(company.plan),
           whiteLabelEnabled: company.plan.whiteLabelEnabled,
         }
       : null,

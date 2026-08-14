@@ -16,6 +16,15 @@ export type AppAbility = MongoAbility<[Action, any]>;
 
 type CompanyWithPlan = Pick<CompanyEntity, 'id' | 'plan'>;
 
+function hasCustomDomainAccess(company: CompanyWithPlan) {
+  return (
+    company.plan?.customDomainEnabled ||
+    company.plan?.type === PlanType.FREE ||
+    company.plan?.type === PlanType.AGENCY ||
+    company.plan?.type === PlanType.CUSTOM
+  );
+}
+
 @Injectable()
 export class AppAbilityFactory {
   createForCompany(company: CompanyWithPlan): AppAbility {
@@ -40,7 +49,7 @@ export class AppAbilityFactory {
       );
     }
 
-    if (company.plan?.customDomainEnabled) {
+    if (hasCustomDomainAccess(company)) {
       can(
         Action.ManageCustomDomain,
         AuthorizationSubject.CompanyDomain,

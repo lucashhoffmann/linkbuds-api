@@ -1,6 +1,7 @@
 import * as argon2 from 'argon2';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
+import { PlanType } from 'src/modules/plan/domain/enums/plan-type.enum';
 import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
 import { ERROR_CODES } from 'src/shared/constants/errors.constants';
 import { NotFoundException } from 'src/shared/exceptions/business.exception';
@@ -213,6 +214,18 @@ describe('Auth use cases', () => {
       id: 'company-id',
       name: 'Linkbuds',
       email: 'hello@linkbuds.com',
+      plan: {
+        id: 'free-plan-id',
+        name: 'Free',
+        code: 'FREE',
+        type: PlanType.FREE,
+        maxClientPages: 1,
+        priceCents: 0,
+        active: true,
+        analyticsEnabled: true,
+        customDomainEnabled: false,
+        whiteLabelEnabled: false,
+      },
       createdAt: new Date(),
       updatedAt: new Date(),
       deletedAt: null,
@@ -231,6 +244,10 @@ describe('Auth use cases', () => {
     expect(result.company).toMatchObject({
       id: 'company-id',
       name: 'Linkbuds',
+      plan: {
+        customDomainEnabled: true,
+        whiteLabelEnabled: false,
+      },
     });
   });
 

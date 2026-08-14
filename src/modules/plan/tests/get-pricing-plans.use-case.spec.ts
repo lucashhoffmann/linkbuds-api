@@ -60,6 +60,9 @@ describe('GetPricingPlansUseCase', () => {
     expect(
       response.plans.find((plan) => plan.code === 'AGENCY')?.features,
     ).toEqual(expect.arrayContaining(['Ate 5 paginas de clientes']));
+    expect(
+      response.plans.find((plan) => plan.code === 'FREE')?.features,
+    ).toEqual(expect.arrayContaining(['Dominio personalizado']));
   });
 
   it('does not return plans disabled in the pricing catalog parameter', async () => {

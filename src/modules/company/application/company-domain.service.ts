@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'node:crypto';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { Action } from 'src/modules/authorization/domain/enums/action.enum';
 import { AuthorizationSubject } from 'src/modules/authorization/domain/enums/authorization-subject.enum';
 import { AppAbilityFactory } from 'src/modules/authorization/application/app-ability.factory';
@@ -15,6 +15,7 @@ import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { CompanyDomainEntity } from '../domain/entities/company-domain.entity';
 import { CompanyEntity } from '../domain/entities/company.entity';
 import { CompanyDomainStatus } from '../domain/enums/company-domain-status.enum';
+import { getCustomDomainCnameTarget } from './company-domain-cname-target';
 import { CreateCompanyDomainDto } from './dto/company-domain.dto';
 import { DomainVerificationService } from './domain-verification.service';
 
@@ -36,10 +37,27 @@ function isValidHostname(hostname: string) {
     .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
+function uniqueConstraintName(error: unknown) {
+  if (
+    !(error instanceof QueryFailedError) &&
+    !(
+      typeof error === 'object' &&
+      error !== null &&
+      'driverError' in error
+    )
+  ) {
+    return null;
+  }
+
+  return (
+    error as {
+      driverError?: { constraint?: string };
+    }
+  ).driverError?.constraint;
+}
+
 function toCompanyDomainResponse(domain: CompanyDomainEntity) {
-  const cnameTarget =
-    process.env.CUSTOM_DOMAIN_CNAME_TARGET ??
-    'configure-o-env-CUSTOM_DOMAIN_CNAME_TARGET';
+  const cnameTarget = getCustomDomainCnameTarget();
 
   return {
     id: domain.id,
@@ -124,16 +142,33 @@ export class CompanyDomainService {
       throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_ALREADY_EXISTS);
     }
 
-    const domain = await this.domainRepository.save(
-      this.domainRepository.create({
-        companyId: auth.companyId,
-        hostname,
-        status: CompanyDomainStatus.PENDING,
-        verificationToken: `linksbuds-${randomBytes(18).toString('hex')}`,
-      }),
-    );
+    try {
+      const domain = await this.domainRepository.save(
+        this.domainRepository.create({
+          companyId: auth.companyId,
+          hostname,
+          status: CompanyDomainStatus.PENDING,
+          verificationToken: `linksbuds-${randomBytes(18).toString('hex')}`,
+        }),
+      );
 
-    return toCompanyDomainResponse(domain);
+      return toCompanyDomainResponse(domain);
+    } catch (error) {
+      const constraint = uniqueConstraintName(error);
+
+      if (
+        constraint === 'UQ_company_domains_hostname' ||
+        constraint === 'UQ_company_domains_hostname_active'
+      ) {
+        throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_ALREADY_EXISTS);
+      }
+
+      if (constraint === 'UQ_company_domains_company_active') {
+        throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_LIMIT_REACHED);
+      }
+
+      throw error;
+    }
   }
 
   async verify(auth: AuthPayload, id: string) {

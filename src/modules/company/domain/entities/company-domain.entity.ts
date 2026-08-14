@@ -23,7 +23,7 @@ export class CompanyDomainEntity {
   @JoinColumn({ name: 'company_id' })
   company!: CompanyEntity;
 
-  @Column({ name: 'hostname', length: 253, nullable: false, unique: true })
+  @Column({ name: 'hostname', length: 253, nullable: false })
   hostname!: string;
 
   @Column({ name: 'status', type: 'varchar', length: 20, nullable: false })

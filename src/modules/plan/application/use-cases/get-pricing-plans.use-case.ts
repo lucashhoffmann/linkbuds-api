@@ -151,6 +151,7 @@ export class GetPricingPlansUseCase {
           'Links ilimitados',
           'Personalizacao da pagina',
           'Metricas basicas de acessos',
+          'Dominio personalizado',
           'QR Code da pagina',
         ],
         action: 'Comecar gratis',

@@ -14,7 +14,7 @@ export const DEFAULT_PUBLIC_PLANS: Array<Partial<PlanEntity>> = [
     companyId: null,
     active: true,
     analyticsEnabled: true,
-    customDomainEnabled: false,
+    customDomainEnabled: true,
     whiteLabelEnabled: false,
   },
   {
