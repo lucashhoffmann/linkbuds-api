@@ -6,11 +6,18 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { LinkPageBackgroundType } from '../enums/link-page-background-type.enum';
+import { LinkPageFooterMode } from '../enums/link-page-footer-mode.enum';
+import { LinkPageLayout } from '../enums/link-page-layout.enum';
 import { LinkPageStatus } from '../enums/link-page-status.enum';
 import { LinkPageType } from '../enums/link-page-type.enum';
+import { LinkPageImageEntity } from './link-page-image.entity';
+import { LinkPageLinkEntity } from './link-page-link.entity';
+import { LinkPageSocialLinkEntity } from './link-page-social-link.entity';
 
 @Entity({ name: 'link_pages' })
 export class LinkPageEntity {
@@ -38,6 +45,75 @@ export class LinkPageEntity {
 
   @Column({ name: 'status', type: 'varchar', length: 20, nullable: false })
   status!: LinkPageStatus;
+
+  @Column({
+    name: 'layout',
+    type: 'varchar',
+    length: 20,
+    nullable: false,
+    default: LinkPageLayout.LAYOUT_1,
+  })
+  layout!: LinkPageLayout;
+
+  @Column({
+    name: 'background_type',
+    type: 'varchar',
+    length: 20,
+    nullable: false,
+    default: LinkPageBackgroundType.SOLID,
+  })
+  backgroundType!: LinkPageBackgroundType;
+
+  @Column({
+    name: 'background_color',
+    type: 'varchar',
+    length: 7,
+    nullable: false,
+    default: '#FFFFFF',
+  })
+  backgroundColor!: string;
+
+  @Column({ name: 'background_image_url', type: 'text', nullable: true })
+  backgroundImageUrl!: string | null;
+
+  @Column({ name: 'avatar_url', type: 'text', nullable: true })
+  avatarUrl!: string | null;
+
+  @Column({ name: 'title', length: 140, nullable: false, default: '' })
+  title!: string;
+
+  @Column({ name: 'subtitle', type: 'text', nullable: true })
+  subtitle!: string | null;
+
+  @Column({
+    name: 'footer_mode',
+    type: 'varchar',
+    length: 20,
+    nullable: false,
+    default: LinkPageFooterMode.LINKSBUDS,
+  })
+  footerMode!: LinkPageFooterMode;
+
+  @Column({ name: 'footer_text', type: 'varchar', length: 160, nullable: true })
+  footerText!: string | null;
+
+  @Column({ name: 'footer_url', type: 'text', nullable: true })
+  footerUrl!: string | null;
+
+  @Column({ name: 'footer_logo_url', type: 'text', nullable: true })
+  footerLogoUrl!: string | null;
+
+  @OneToMany(() => LinkPageLinkEntity, (link) => link.linkPage)
+  links!: LinkPageLinkEntity[];
+
+  @OneToMany(
+    () => LinkPageSocialLinkEntity,
+    (socialLink) => socialLink.linkPage,
+  )
+  socialLinks!: LinkPageSocialLinkEntity[];
+
+  @OneToMany(() => LinkPageImageEntity, (image) => image.linkPage)
+  images!: LinkPageImageEntity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

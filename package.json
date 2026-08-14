@@ -17,10 +17,10 @@
     "migration:show": "pnpm typeorm migration:show",
     "migration:revert": "pnpm typeorm migration:revert",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" --no-error-on-unmatched-pattern",
-    "start": "nest start",
+    "start": "pnpm build && node dist/main.js",
     "dev": "nest start --watch",
     "debug": "nest start --debug --watch",
-    "prod": "node dist/main",
+    "prod": "node dist/main.js",
     "migration:run:prod": "node dist/cli/typeorm-runner.cli.js run",
     "migration:show:prod": "node dist/cli/typeorm-runner.cli.js show",
     "migration:revert:prod": "node dist/cli/typeorm-runner.cli.js revert",
@@ -33,6 +33,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@casl/ability": "^7.0.1",
     "@nestjs/common": "^11.1.29",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.1.29",
@@ -40,6 +41,7 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.3",
     "argon2": "^0.45.1",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
     "reflect-metadata": "^0.2.2",

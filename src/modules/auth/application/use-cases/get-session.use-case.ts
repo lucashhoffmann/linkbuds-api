@@ -30,6 +30,7 @@ export class GetSessionUseCase {
 
     const company = await this.companyRepository.findOne({
       where: { id: auth.companyId },
+      relations: { plan: true },
     });
 
     if (!company) {

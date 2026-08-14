@@ -12,6 +12,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { CompanyDomainEntity } from './company-domain.entity';
 
 @Entity({ name: 'company' })
 export class CompanyEntity {
@@ -42,6 +43,9 @@ export class CompanyEntity {
 
   @OneToMany(() => PlanEntity, (plan) => plan.company)
   customPlans!: PlanEntity[];
+
+  @OneToMany(() => CompanyDomainEntity, (domain) => domain.company)
+  domains!: CompanyDomainEntity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

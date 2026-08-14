@@ -1,4 +1,5 @@
 export enum PlanType {
-  STANDARD = 'STANDARD',
+  FREE = 'FREE',
+  AGENCY = 'AGENCY',
   CUSTOM = 'CUSTOM',
 }

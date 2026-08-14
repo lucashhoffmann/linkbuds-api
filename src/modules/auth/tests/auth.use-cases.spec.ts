@@ -1,4 +1,7 @@
 import * as argon2 from 'argon2';
+import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
+import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
+import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
 import { ERROR_CODES } from 'src/shared/constants/errors.constants';
 import { NotFoundException } from 'src/shared/exceptions/business.exception';
 import { GetSessionUseCase } from '../application/use-cases/get-session.use-case';
@@ -38,8 +41,14 @@ describe('Auth use cases', () => {
 
   it('registers a company and user in one transaction', async () => {
     const companyRepository = createRepositoryMock();
+    const planRepository = createRepositoryMock();
     const userRepository = createRepositoryMock();
     companyRepository.findOne.mockResolvedValue(null);
+    planRepository.findOne.mockResolvedValue({
+      id: 'free-plan-id',
+      code: 'FREE',
+      active: true,
+    });
     userRepository.findOne.mockResolvedValue(null);
     companyRepository.save.mockResolvedValue({
       id: 'company-id',
@@ -57,9 +66,13 @@ describe('Auth use cases', () => {
         Promise.resolve(
           callback({
             getRepository: (entity: { name: string }) =>
-              entity.name === 'CompanyEntity'
+              entity === CompanyEntity
                 ? companyRepository
-                : userRepository,
+                : entity === PlanEntity
+                  ? planRepository
+                  : entity === UserEntity
+                    ? userRepository
+                    : userRepository,
           }),
         ),
       ),
@@ -84,12 +97,57 @@ describe('Auth use cases', () => {
     expect(companyRepository.create).toHaveBeenCalledWith({
       name: 'Linkbuds',
       email: 'user@linkbuds.com',
+      planId: 'free-plan-id',
+    });
+    expect(planRepository.findOne).toHaveBeenCalledWith({
+      where: { code: 'FREE', active: true },
     });
     expect(argon2.hash).toHaveBeenCalledWith('secret123');
     expect(tokens.signAccess).toHaveBeenCalledWith({
       id: 'user-id',
       companyId: 'company-id',
     });
+  });
+
+  it('rejects registration when the free plan is not available', async () => {
+    const companyRepository = createRepositoryMock();
+    const planRepository = createRepositoryMock();
+    const userRepository = createRepositoryMock();
+    companyRepository.findOne.mockResolvedValue(null);
+    planRepository.findOne.mockResolvedValue(null);
+    userRepository.findOne.mockResolvedValue(null);
+
+    const dataSource = {
+      transaction: jest.fn((callback) =>
+        Promise.resolve(
+          callback({
+            getRepository: (entity: { name: string }) =>
+              entity === CompanyEntity
+                ? companyRepository
+                : entity === PlanEntity
+                  ? planRepository
+                  : userRepository,
+          }),
+        ),
+      ),
+    };
+    const useCase = new RegisterUserAndCompanyUseCase(
+      dataSource as never,
+      tokens,
+    );
+
+    await expect(
+      useCase.execute({
+        name: 'User',
+        email: 'user@linkbuds.com',
+        password: 'secret123',
+        companyName: 'Linkbuds',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: ERROR_CODES.LINK_PAGE_PLAN_REQUIRED,
+    });
+    expect(companyRepository.save).not.toHaveBeenCalled();
+    expect(userRepository.save).not.toHaveBeenCalled();
   });
 
   it('logs in with a valid password', async () => {

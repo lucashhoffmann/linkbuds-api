@@ -4,15 +4,30 @@ import { Repository } from 'typeorm';
 import { PlanEntity } from '../domain/entities/plan.entity';
 import { PlanType } from '../domain/enums/plan-type.enum';
 
-export const DEFAULT_STANDARD_PLANS: Array<Partial<PlanEntity>> = [
+export const DEFAULT_PUBLIC_PLANS: Array<Partial<PlanEntity>> = [
   {
-    name: 'Agency 20',
-    code: 'AGENCY_20',
-    type: PlanType.STANDARD,
+    name: 'Free',
+    code: 'FREE',
+    type: PlanType.FREE,
+    maxClientPages: 1,
+    priceCents: 0,
+    companyId: null,
+    active: true,
+    analyticsEnabled: true,
+    customDomainEnabled: false,
+    whiteLabelEnabled: false,
+  },
+  {
+    name: 'Agency',
+    code: 'AGENCY',
+    type: PlanType.AGENCY,
     maxClientPages: 20,
     priceCents: 18000,
     companyId: null,
     active: true,
+    analyticsEnabled: true,
+    customDomainEnabled: true,
+    whiteLabelEnabled: true,
   },
 ];
 
@@ -28,6 +43,6 @@ export class PlansSeeder implements OnModuleInit {
   }
 
   async seedDefaults(): Promise<void> {
-    await this.plansRepository.upsert(DEFAULT_STANDARD_PLANS, ['code']);
+    await this.plansRepository.upsert(DEFAULT_PUBLIC_PLANS, ['code']);
   }
 }

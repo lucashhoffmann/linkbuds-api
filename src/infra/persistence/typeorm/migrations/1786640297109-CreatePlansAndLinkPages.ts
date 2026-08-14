@@ -18,11 +18,11 @@ export class CreatePlansAndLinkPages1786640297109 implements MigrationInterface 
         "created_at" TIMESTAMP NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "UQ_plans_code" UNIQUE ("code"),
-        CONSTRAINT "CHK_plans_type" CHECK ("type" IN ('STANDARD', 'CUSTOM')),
+        CONSTRAINT "CHK_plans_type" CHECK ("type" IN ('FREE', 'AGENCY', 'CUSTOM')),
         CONSTRAINT "CHK_plans_max_client_pages_positive" CHECK ("max_client_pages" > 0),
         CONSTRAINT "CHK_plans_price_cents_non_negative" CHECK ("price_cents" >= 0),
         CONSTRAINT "CHK_plans_type_company_id" CHECK (
-          ("type" = 'STANDARD' AND "company_id" IS NULL)
+          ("type" IN ('FREE', 'AGENCY') AND "company_id" IS NULL)
           OR
           ("type" = 'CUSTOM' AND "company_id" IS NOT NULL)
         ),

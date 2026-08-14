@@ -1,0 +1,6 @@
+export enum AnalyticsTargetType {
+  HORIZONTAL_LINK = 'HORIZONTAL_LINK',
+  VERTICAL_LINK = 'VERTICAL_LINK',
+  SOCIAL_LINK = 'SOCIAL_LINK',
+  IMAGE = 'IMAGE',
+}

@@ -1,0 +1,7 @@
+export enum AnalyticsEventType {
+  PAGE_VIEW = 'PAGE_VIEW',
+  PAGE_EXIT = 'PAGE_EXIT',
+  LINK_CLICK = 'LINK_CLICK',
+  SOCIAL_CLICK = 'SOCIAL_CLICK',
+  IMAGE_CLICK = 'IMAGE_CLICK',
+}

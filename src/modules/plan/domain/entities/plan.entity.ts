@@ -47,6 +47,15 @@ export class PlanEntity {
   @Column({ name: 'active', type: 'boolean', default: true })
   active!: boolean;
 
+  @Column({ name: 'analytics_enabled', type: 'boolean', default: false })
+  analyticsEnabled!: boolean;
+
+  @Column({ name: 'custom_domain_enabled', type: 'boolean', default: false })
+  customDomainEnabled!: boolean;
+
+  @Column({ name: 'white_label_enabled', type: 'boolean', default: false })
+  whiteLabelEnabled!: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

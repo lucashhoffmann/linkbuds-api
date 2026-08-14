@@ -38,3 +38,9 @@ export class UnauthorizedException extends BusinessException {
     super(errorCode, HttpStatus.UNAUTHORIZED, message);
   }
 }
+
+export class ForbiddenException extends BusinessException {
+  constructor(errorCode: ErrorCode, message?: string) {
+    super(errorCode, HttpStatus.FORBIDDEN, message);
+  }
+}
