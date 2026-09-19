@@ -6,7 +6,6 @@ import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
 import { ERROR_CODES } from 'src/shared/constants/errors.constants';
 import { NotFoundException } from 'src/shared/exceptions/business.exception';
 import { GetSessionUseCase } from '../application/use-cases/get-session.use-case';
-import { LoginAuthUseCase } from '../application/use-cases/login-auth.use-case';
 import { RegisterUserAndCompanyUseCase } from '../application/use-cases/register-user-and-company.use-case';
 
 jest.mock('argon2', () => ({
@@ -14,10 +13,7 @@ jest.mock('argon2', () => ({
   verify: jest.fn(() => Promise.resolve(true)),
 }));
 
-const tokens = {
-  signAccess: jest.fn(() => 'access-token'),
-  signRefresh: jest.fn(() => 'refresh-token'),
-};
+const query = jest.fn(() => Promise.resolve());
 
 function createRepositoryMock() {
   return {
@@ -66,6 +62,7 @@ describe('Auth use cases', () => {
       transaction: jest.fn((callback) =>
         Promise.resolve(
           callback({
+            query,
             getRepository: (entity: { name: string }) =>
               entity === CompanyEntity
                 ? companyRepository
@@ -78,10 +75,7 @@ describe('Auth use cases', () => {
         ),
       ),
     };
-    const useCase = new RegisterUserAndCompanyUseCase(
-      dataSource as never,
-      tokens,
-    );
+    const useCase = new RegisterUserAndCompanyUseCase(dataSource as never);
 
     await expect(
       useCase.execute({
@@ -90,10 +84,7 @@ describe('Auth use cases', () => {
         password: 'secret123',
         companyName: ' Linkbuds ',
       }),
-    ).resolves.toEqual({
-      token: 'access-token',
-      refreshToken: 'refresh-token',
-    });
+    ).resolves.toEqual({ ok: true });
 
     expect(companyRepository.create).toHaveBeenCalledWith({
       name: 'Linkbuds',
@@ -104,10 +95,12 @@ describe('Auth use cases', () => {
       where: { code: 'FREE', active: true },
     });
     expect(argon2.hash).toHaveBeenCalledWith('secret123');
-    expect(tokens.signAccess).toHaveBeenCalledWith({
-      id: 'user-id',
-      companyId: 'company-id',
-    });
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('"user"'), [
+      'user-id',
+      'User',
+      'user@linkbuds.com',
+    ]);
   });
 
   it('rejects registration when the free plan is not available', async () => {
@@ -122,6 +115,7 @@ describe('Auth use cases', () => {
       transaction: jest.fn((callback) =>
         Promise.resolve(
           callback({
+            query,
             getRepository: (entity: { name: string }) =>
               entity === CompanyEntity
                 ? companyRepository
@@ -132,10 +126,7 @@ describe('Auth use cases', () => {
         ),
       ),
     };
-    const useCase = new RegisterUserAndCompanyUseCase(
-      dataSource as never,
-      tokens,
-    );
+    const useCase = new RegisterUserAndCompanyUseCase(dataSource as never);
 
     await expect(
       useCase.execute({
@@ -149,48 +140,6 @@ describe('Auth use cases', () => {
     });
     expect(companyRepository.save).not.toHaveBeenCalled();
     expect(userRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('logs in with a valid password', async () => {
-    const userRepository = createRepositoryMock();
-    userRepository.findOne.mockResolvedValue({
-      id: 'user-id',
-      password: 'hashed-password',
-      company: { id: 'company-id' },
-    });
-    const useCase = new LoginAuthUseCase(userRepository as never, tokens);
-
-    await expect(
-      useCase.execute({
-        email: ' USER@LINKBUDS.COM ',
-        password: 'secret123',
-      }),
-    ).resolves.toEqual({
-      token: 'access-token',
-      refreshToken: 'refresh-token',
-    });
-
-    expect(userRepository.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { email: 'user@linkbuds.com' },
-      }),
-    );
-    expect(argon2.verify).toHaveBeenCalledWith('hashed-password', 'secret123');
-  });
-
-  it('rejects invalid credentials', async () => {
-    const userRepository = createRepositoryMock();
-    userRepository.findOne.mockResolvedValue(null);
-    const useCase = new LoginAuthUseCase(userRepository as never, tokens);
-
-    await expect(
-      useCase.execute({
-        email: 'missing@linkbuds.com',
-        password: 'secret123',
-      }),
-    ).rejects.toMatchObject({
-      errorCode: ERROR_CODES.AUTH_INVALID_CREDENTIALS,
-    });
   });
 
   it('returns session without user password', async () => {

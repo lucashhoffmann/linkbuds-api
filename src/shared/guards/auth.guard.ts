@@ -1,41 +1,51 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
-import * as jwt from 'jsonwebtoken';
+import type { IncomingHttpHeaders } from 'node:http';
+import { DataSource } from 'typeorm';
+import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
+import {
+  getBetterAuth,
+  toBetterAuthHeaders,
+} from 'src/modules/auth/infra/better-auth.config';
 import { ERROR_CODES } from 'src/shared/constants/errors.constants';
 import { UnauthorizedException } from 'src/shared/exceptions/business.exception';
 import { AuthPayload } from 'src/shared/types/auth-payload.types';
 
-function extractToken(authorization?: string): string | null {
-  if (!authorization) {
-    return null;
-  }
-
-  const [scheme, token] = authorization.split(' ');
-
-  if (scheme?.toLowerCase() === 'bearer' && token) {
-    return token;
-  }
-
-  return authorization;
+interface AuthenticatedRequest {
+  headers: IncomingHttpHeaders;
+  auth?: AuthPayload;
 }
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest();
-    const token = extractToken(request.headers.authorization);
+  constructor(private readonly dataSource: DataSource) {}
 
-    if (!token) {
-      throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_MISSING);
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const auth = await getBetterAuth();
+    const session = await auth.api
+      .getSession({
+        headers: await toBetterAuthHeaders(request.headers),
+      })
+      .catch(() => null);
+
+    if (!session?.user?.id) {
+      throw new UnauthorizedException(ERROR_CODES.AUTH_UNAUTHORIZED);
     }
 
-    try {
-      request.auth = jwt.verify(
-        token,
-        process.env.ACCESS_TOKEN || 'secret',
-      ) as AuthPayload;
-      return true;
-    } catch {
-      throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
+    const user = await this.dataSource.getRepository(UserEntity).findOne({
+      where: { id: session.user.id },
+      relations: { company: true },
+    });
+
+    if (!user?.company?.id) {
+      throw new UnauthorizedException(ERROR_CODES.AUTH_UNAUTHORIZED);
     }
+
+    request.auth = {
+      id: user.id,
+      companyId: user.company.id,
+    };
+
+    return true;
   }
 }

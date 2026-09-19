@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { DataSource } from 'typeorm';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
@@ -10,15 +10,11 @@ import {
   ConflictException,
   ForbiddenException,
 } from 'src/shared/exceptions/business.exception';
-import type { TokenService } from '../ports/token.service';
 import { RegisterUserAndCompanyDto } from '../dto/register-user-and-company.dto';
 
 @Injectable()
 export class RegisterUserAndCompanyUseCase {
-  constructor(
-    private readonly dataSource: DataSource,
-    @Inject('TokenService') private readonly tokens: TokenService,
-  ) {}
+  constructor(private readonly dataSource: DataSource) {}
 
   async execute(dto: RegisterUserAndCompanyDto) {
     const name = dto.name.trim();
@@ -56,24 +52,33 @@ export class RegisterUserAndCompanyUseCase {
         }),
       );
 
+      const password = await argon2.hash(dto.password);
       const user = await userRepository.save(
         userRepository.create({
           name,
           email,
-          password: await argon2.hash(dto.password),
+          password,
           company,
         }),
       );
 
-      const payload = {
-        id: user.id,
-        companyId: company.id,
-      };
+      await manager.query(
+        `
+          INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt")
+          VALUES ($1, $2, $3, false, now(), now())
+        `,
+        [user.id, user.name, user.email],
+      );
 
-      return {
-        token: this.tokens.signAccess(payload),
-        refreshToken: this.tokens.signRefresh(payload),
-      };
+      await manager.query(
+        `
+          INSERT INTO "account" ("id", "accountId", "providerId", "userId", "password", "createdAt", "updatedAt")
+          VALUES (uuid_generate_v4()::text, $1, 'credential', $1, $2, now(), now())
+        `,
+        [user.id, password],
+      );
+
+      return { ok: true };
     });
   }
 }

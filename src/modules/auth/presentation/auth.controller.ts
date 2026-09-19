@@ -12,16 +12,11 @@ import { TransformResponseInterceptor } from 'src/shared/interceptors';
 import { ZodValidationPipe } from 'src/shared/pipes/zod-validation.pipe';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import {
-  loginAuthDto,
-  type LoginAuthDto,
-} from '../application/dto/login-auth.dto';
-import {
   registerUserAndCompanyDto,
   type RegisterUserAndCompanyDto,
 } from '../application/dto/register-user-and-company.dto';
 import {
   GetSessionUseCase,
-  LoginAuthUseCase,
   RegisterUserAndCompanyUseCase,
 } from '../application/use-cases';
 
@@ -30,19 +25,8 @@ import {
 export class AuthController {
   constructor(
     private readonly registerUserAndCompanyUseCase: RegisterUserAndCompanyUseCase,
-    private readonly loginAuthUseCase: LoginAuthUseCase,
     private readonly getSessionUseCase: GetSessionUseCase,
   ) {}
-
-  @Post()
-  login(@Body(new ZodValidationPipe(loginAuthDto)) dto: LoginAuthDto) {
-    return this.loginAuthUseCase.execute(dto);
-  }
-
-  @Post('login')
-  loginAlias(@Body(new ZodValidationPipe(loginAuthDto)) dto: LoginAuthDto) {
-    return this.loginAuthUseCase.execute(dto);
-  }
 
   @Post('register')
   register(
