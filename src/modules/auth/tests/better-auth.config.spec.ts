@@ -31,3 +31,32 @@ describe('buildBetterAuthOptions', () => {
     });
   });
 });
+
+describe('reset password email', () => {
+  it('logs instead of sending when RESEND_API_KEY is unset (dev)', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    const options = buildBetterAuthOptions(baseEnv);
+
+    await options.emailAndPassword.sendResetPassword({
+      user: { id: '1', name: 'Ana', email: 'ana@x.com' },
+      url: 'http://localhost:3030/api/auth/reset-password/tok',
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('refuses to silently drop emails in production', async () => {
+    const options = buildBetterAuthOptions({
+      ...baseEnv,
+      NODE_ENV: 'production',
+    });
+
+    await expect(
+      options.emailAndPassword.sendResetPassword({
+        user: { id: '1', name: 'Ana', email: 'ana@x.com' },
+        url: 'http://x/reset',
+      }),
+    ).rejects.toThrow('RESEND_API_KEY');
+  });
+});

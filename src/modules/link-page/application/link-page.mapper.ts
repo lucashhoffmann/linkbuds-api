@@ -76,6 +76,8 @@ export function toLinkPageDetail(page: LinkPageEntity) {
     footerText: page.footerText,
     footerUrl: page.footerUrl,
     footerLogoUrl: page.footerLogoUrl,
+    gtmContainerId: page.gtmContainerId,
+    ga4MeasurementId: page.ga4MeasurementId,
     links: (page.links ?? []).map(toLinkPageLinkResponse),
     socialLinks: (page.socialLinks ?? []).map(toSocialLinkResponse),
     images: (page.images ?? []).map(toImageResponse),

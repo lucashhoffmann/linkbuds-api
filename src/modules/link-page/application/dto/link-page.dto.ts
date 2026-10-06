@@ -57,6 +57,20 @@ const optionalText = (max: number) =>
     .optional()
     .transform((value) => (value === '' ? null : value));
 
+// Injected into <script> on the public page: strict format is the XSS guard.
+const trackingIdSchema = (pattern: RegExp) =>
+  z
+    .string()
+    .trim()
+    .toUpperCase()
+    .transform((value) => (value === '' ? null : value))
+    .refine((value) => value === null || pattern.test(value))
+    .nullable()
+    .optional();
+
+export const gtmContainerIdPattern = /^GTM-[A-Z0-9]{4,12}$/;
+export const ga4MeasurementIdPattern = /^G-[A-Z0-9]{4,16}$/;
+
 export const createLinkPageDto = z.object({
   name: z.string().trim().min(1).max(120),
   slug: slugSchema,
@@ -90,6 +104,9 @@ export const updateLinkPageDto = z
     /** POST pages only. */
     postNetwork: z.enum(SocialPlatform).nullable().optional(),
     postUrl: httpUrlSchema.nullable().optional(),
+    /** Bio pages only; posts use their bio's. */
+    gtmContainerId: trackingIdSchema(gtmContainerIdPattern),
+    ga4MeasurementId: trackingIdSchema(ga4MeasurementIdPattern),
   })
   .refine((data) => Object.keys(data).length > 0);
 
@@ -98,6 +115,11 @@ export const updateFooterDto = z.object({
   footerText: optionalText(160),
   footerUrl: nullableUrlSchema,
   footerLogoUrl: nullableUrlSchema,
+});
+
+/** Company default footer; `applyToExisting` also overwrites every page. */
+export const updateFooterDefaultDto = updateFooterDto.extend({
+  applyToExisting: z.boolean().default(false),
 });
 
 type StripDefaults<S extends z.ZodRawShape> = {
@@ -204,6 +226,7 @@ export const analyticsPresenceDto = z.object({
 export type CreateLinkPageDto = z.infer<typeof createLinkPageDto>;
 export type UpdateLinkPageDto = z.infer<typeof updateLinkPageDto>;
 export type UpdateFooterDto = z.infer<typeof updateFooterDto>;
+export type UpdateFooterDefaultDto = z.infer<typeof updateFooterDefaultDto>;
 export type LinkPageLinkDto = z.infer<typeof linkPageLinkDto>;
 export type UpdateLinkPageLinkDto = z.infer<typeof updateLinkPageLinkDto>;
 export type LinkPageSocialLinkDto = z.infer<typeof linkPageSocialLinkDto>;

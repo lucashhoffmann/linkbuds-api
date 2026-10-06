@@ -1,4 +1,5 @@
 import { LinkPageEntity } from 'src/modules/link-page/domain/entities/link-page.entity';
+import { LinkPageFooterMode } from 'src/modules/link-page/domain/enums/link-page-footer-mode.enum';
 import { CompanyConditionEntity } from 'src/modules/plan/domain/entities/company-condition.entity';
 import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
 import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
@@ -33,6 +34,25 @@ export class CompanyEntity {
   @ManyToOne(() => PlanEntity)
   @JoinColumn({ name: 'plan_id' })
   plan!: PlanEntity;
+
+  /** Default footer copied into new pages. */
+  @Column({
+    name: 'footer_mode',
+    type: 'varchar',
+    length: 20,
+    nullable: false,
+    default: LinkPageFooterMode.LINKBUDS,
+  })
+  footerMode!: LinkPageFooterMode;
+
+  @Column({ name: 'footer_text', type: 'varchar', length: 160, nullable: true })
+  footerText!: string | null;
+
+  @Column({ name: 'footer_url', type: 'text', nullable: true })
+  footerUrl!: string | null;
+
+  @Column({ name: 'footer_logo_url', type: 'text', nullable: true })
+  footerLogoUrl!: string | null;
 
   @OneToMany(() => CompanyConditionEntity, (condition) => condition.company)
   conditions!: CompanyConditionEntity[];

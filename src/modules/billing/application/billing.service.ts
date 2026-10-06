@@ -1,6 +1,15 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { IncomingHttpHeaders } from 'node:http';
-import { DataSource, EntityManager, In } from 'typeorm';
+import {
+  Brackets,
+  DataSource,
+  EntityManager,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThan,
+  Not,
+} from 'typeorm';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
 import {
@@ -10,7 +19,6 @@ import {
   entitlementsFor,
 } from 'src/modules/plan/domain/entitlements';
 import { UserRole } from 'src/modules/user/domain/enums/user-role.enum';
-import { AuthUserEntity } from 'src/modules/auth/domain/entities/auth-user.entity';
 import { ERROR_CODES } from 'src/shared/errors/error-catalog';
 import { AppException } from 'src/shared/errors/app.exception';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
@@ -20,19 +28,20 @@ import {
   LedgerEntryEntity,
   type LedgerEntryType,
 } from '../domain/entities/ledger-entry.entity';
-import { SubscriptionEntity } from '../domain/entities/subscription.entity';
-import { WebhookEventEntity } from '../domain/entities/webhook-event.entity';
-import { priceFor } from '../domain/pricing';
 import {
-  FakePaymentProvider,
-  FAKE_SIGNATURE_HEADER,
-  signFakePayload,
-} from '../infra/fake-payment.provider';
-import type { CheckoutDto } from './dto/billing.dto';
+  type BillingCycle,
+  SubscriptionEntity,
+} from '../domain/entities/subscription.entity';
+import { WebhookEventEntity } from '../domain/entities/webhook-event.entity';
+import { priceFor, withCardFee } from '../domain/pricing';
+import type { SubscribeDto } from './dto/billing.dto';
 import { runIdempotent } from './idempotency';
 import {
   type BillingEvent,
+  type CardSubscriptionResult,
   PAYMENT_PROVIDER,
+  PaymentDeclinedError,
+  type PaymentDetails,
   type PaymentProvider,
 } from './payment-provider';
 
@@ -44,15 +53,49 @@ const BALANCE_SIGN: Record<LedgerEntryType, 1 | -1> = {
   CREDIT: -1,
 };
 
-function webBaseUrl() {
-  return (process.env.PUBLIC_WEB_URL ?? 'http://localhost:5173').replace(
-    /\/$/,
-    '',
-  );
+export const MAX_INSTALLMENTS = 12;
+const RENEWAL_GRACE_DAYS = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Back to the free plan, unless the company is already on another plan
+ * (e.g. an admin moved it): only undo what this subscription granted.
+ */
+export async function downgrade(
+  manager: EntityManager,
+  subscription: SubscriptionEntity,
+) {
+  const freePlan = await manager
+    .getRepository(PlanEntity)
+    .findOneByOrFail({ code: DEFAULT_PLAN_CODE });
+  await manager
+    .getRepository(CompanyEntity)
+    .update(
+      { id: subscription.companyId, planId: subscription.planId },
+      { planId: freePlan.id },
+    );
+}
+
+/** Explicit end from the provider, else start (or now) + one billing cycle. */
+function periodEnd(
+  event: { currentPeriodEnd: string | null; periodStart?: string },
+  cycle: BillingCycle,
+) {
+  if (event.currentPeriodEnd) {
+    return new Date(event.currentPeriodEnd);
+  }
+
+  const end = event.periodStart
+    ? new Date(`${event.periodStart.slice(0, 10)}T12:00:00Z`)
+    : new Date();
+  end.setUTCMonth(end.getUTCMonth() + (cycle === 'YEARLY' ? 12 : 1));
+  return end;
 }
 
 @Injectable()
 export class BillingService {
+  private readonly logger = new Logger(BillingService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     @Optional()
@@ -125,6 +168,7 @@ export class BillingService {
         plan: { code: subscription.plan.code, name: subscription.plan.name },
         billingCycle: subscription.billingCycle,
         amountCents: subscription.amountCents,
+        installmentCount: subscription.installmentCount,
         currentPeriodEnd: subscription.currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
       },
@@ -149,8 +193,143 @@ export class BillingService {
     };
   }
 
-  /** Idempotent per `Idempotency-Key`: retries return the same checkout. */
-  checkout(auth: AuthPayload, dto: CheckoutDto, idempotencyKey?: string) {
+  /**
+   * One history entry with what the payer needs to understand it: plan vs
+   * card fee, installments, card and receipt (live from the gateway; the
+   * entry still renders if the gateway is unreachable).
+   */
+  async ledgerEntry(auth: AuthPayload, entryId: string) {
+    const entry = await this.dataSource
+      .getRepository(LedgerEntryEntity)
+      .findOneBy({ id: entryId, companyId: auth.companyId });
+
+    if (!entry) {
+      throw new AppException(ERROR_CODES.BILLING_ENTRY_NOT_FOUND);
+    }
+
+    const meta = (entry.metadata ?? {}) as {
+      planId?: string;
+      billingCycle?: BillingCycle;
+      installmentCount?: number;
+      feeCents?: number | null;
+    };
+    const plan = meta.planId
+      ? await this.dataSource
+          .getRepository(PlanEntity)
+          .findOneBy({ id: meta.planId })
+      : null;
+    const installmentCount = meta.installmentCount ?? 1;
+    let payment: PaymentDetails | null = null;
+
+    if (
+      this.provider &&
+      entry.provider === this.provider.name &&
+      entry.providerReference
+    ) {
+      payment = await this.provider
+        .getPaymentDetails(entry.providerReference)
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `Payment details unavailable for ledger ${entry.id}: ${String(error)}`,
+          );
+          return null;
+        });
+    }
+
+    return {
+      id: entry.id,
+      type: entry.type,
+      description: entry.description,
+      amountCents: entry.amountCents,
+      currency: entry.currency,
+      createdAt: entry.createdAt,
+      plan: plan ? { code: plan.code, name: plan.name } : null,
+      billingCycle: meta.billingCycle ?? null,
+      installments:
+        installmentCount > 1
+          ? {
+              count: installmentCount,
+              amountCents: Math.floor(entry.amountCents / installmentCount),
+            }
+          : null,
+      breakdown:
+        meta.feeCents != null
+          ? {
+              planCents: entry.amountCents - meta.feeCents,
+              feeCents: meta.feeCents,
+            }
+          : null,
+      transactionId: entry.providerReference,
+      payment,
+    };
+  }
+
+  /**
+   * Price per paid public plan and cycle with the gateway card fee passed to
+   * the payer. `company` = its special conditions/coupons; null = catalog.
+   */
+  async quote(company: CompanyEntity | null) {
+    const plans = await this.dataSource.getRepository(PlanEntity).find({
+      where: { public: true, active: true },
+      order: { sortOrder: 'ASC' },
+    });
+    const counts = Array.from({ length: MAX_INSTALLMENTS }, (_, i) => i + 1);
+    const fees = await Promise.all(counts.map((count) => this.cardFee(count)));
+    const pricing = company ?? { plan: { id: '' }, conditions: [] };
+
+    return {
+      method: 'CREDIT_CARD' as const,
+      quotes: plans.flatMap((plan) =>
+        (['MONTHLY', 'YEARLY'] as const)
+          .map((billingCycle) => {
+            const base = priceFor(pricing as never, plan, billingCycle);
+
+            return {
+              planCode: plan.code,
+              planName: plan.name,
+              billingCycle,
+              ...withCardFee(base, fees[0]),
+              // Yearly can be split on the card; each count has its own fee tier.
+              installments:
+                billingCycle === 'YEARLY'
+                  ? counts.map((count) => {
+                      const { totalCents } = withCardFee(base, fees[count - 1]);
+
+                      return {
+                        count,
+                        totalCents,
+                        installmentCents: Math.floor(totalCents / count),
+                      };
+                    })
+                  : [],
+            };
+          })
+          .filter((quote) => quote.baseCents > 0),
+      ),
+    };
+  }
+
+  private cardFee(installmentCount: number) {
+    return this.provider
+      ? this.provider.cardFee(installmentCount)
+      : Promise.resolve({ percent: 0, fixedCents: 0 });
+  }
+
+  async companyQuote(auth: AuthPayload) {
+    return this.quote(await this.loadCompany(auth.companyId));
+  }
+
+  /**
+   * Transparent checkout: charges the card now and activates the plan in the
+   * same request. Idempotent per `Idempotency-Key` (keyed on plan/cycle/total,
+   * never on card data).
+   */
+  subscribe(
+    auth: AuthPayload,
+    dto: SubscribeDto,
+    remoteIp: string,
+    idempotencyKey?: string,
+  ) {
     this.assertOwner(auth);
 
     if (!idempotencyKey) {
@@ -159,20 +338,38 @@ export class BillingService {
 
     return runIdempotent(
       this.dataSource,
-      `checkout:${auth.companyId}`,
+      `subscribe:${auth.companyId}`,
       idempotencyKey,
-      dto,
-      () => this.createCheckout(auth, dto, idempotencyKey),
+      {
+        planCode: dto.planCode,
+        billingCycle: dto.billingCycle,
+        installmentCount: dto.installmentCount,
+        expectedTotalCents: dto.expectedTotalCents,
+      },
+      () => this.createSubscription(auth, dto, remoteIp),
     );
   }
 
-  private async createCheckout(
+  private async createSubscription(
     auth: AuthPayload,
-    dto: CheckoutDto,
-    idempotencyKey: string,
+    dto: SubscribeDto,
+    remoteIp: string,
   ) {
     const provider = this.requireProvider();
     const company = await this.loadCompany(auth.companyId);
+    const current = await this.dataSource
+      .getRepository(SubscriptionEntity)
+      .findOneBy({ companyId: company.id, status: In(['ACTIVE', 'PAST_DUE']) });
+
+    // A past-due installment plan has no live contract at the gateway (its
+    // renewal was refused): paying again is how the owner recovers it.
+    if (
+      current &&
+      !(current.status === 'PAST_DUE' && current.installmentCount > 1)
+    ) {
+      throw new AppException(ERROR_CODES.BILLING_ALREADY_SUBSCRIBED);
+    }
+
     const plan = await this.dataSource.getRepository(PlanEntity).findOneBy({
       code: dto.planCode,
       active: true,
@@ -182,10 +379,20 @@ export class BillingService {
       throw new AppException(ERROR_CODES.BILLING_PLAN_UNAVAILABLE);
     }
 
-    const amountCents = priceFor(company, plan, dto.billingCycle);
+    const price = withCardFee(
+      priceFor(company, plan, dto.billingCycle),
+      await provider.cardFee(dto.installmentCount),
+    );
 
-    if (amountCents === 0) {
+    if (price.baseCents === 0) {
       throw new AppException(ERROR_CODES.BILLING_NOTHING_TO_PAY);
+    }
+
+    // The payer confirmed a total on screen: never charge a different one.
+    if (price.totalCents !== dto.expectedTotalCents) {
+      throw new AppException(ERROR_CODES.BILLING_QUOTE_CHANGED, {
+        details: price,
+      });
     }
 
     const checkouts = this.dataSource.getRepository(BillingCheckoutEntity);
@@ -194,38 +401,74 @@ export class BillingService {
         companyId: company.id,
         planId: plan.id,
         billingCycle: dto.billingCycle,
-        amountCents,
+        amountCents: price.totalCents,
+        feeCents: price.feeCents,
+        installmentCount: dto.installmentCount,
         provider: provider.name,
         createdBy: auth.id,
       }),
     );
-    const owner = await this.dataSource
-      .getRepository(AuthUserEntity)
-      .findOneBy({ id: auth.id });
-    const session = await provider.createCheckout({
-      checkoutId: checkout.id,
-      companyId: company.id,
-      customerEmail: owner?.email ?? company.email,
-      planCode: plan.code,
-      planName: plan.name,
-      billingCycle: dto.billingCycle,
-      amountCents,
-      successUrl: `${webBaseUrl()}/settings`,
-      cancelUrl: `${webBaseUrl()}/settings`,
-      idempotencyKey,
-    });
-    checkout.providerSessionId = session.providerSessionId;
-    checkout.checkoutUrl = session.checkoutUrl;
+    let result: CardSubscriptionResult;
+
+    try {
+      result = await provider.subscribeWithCard({
+        checkoutId: checkout.id,
+        companyId: company.id,
+        planName: plan.name,
+        billingCycle: dto.billingCycle,
+        amountCents: price.totalCents,
+        installmentCount: dto.installmentCount,
+        holder: dto.holder,
+        card: dto.card,
+        remoteIp,
+      });
+    } catch (error) {
+      checkout.status = 'FAILED';
+      await checkouts.save(checkout);
+
+      if (error instanceof PaymentDeclinedError) {
+        throw new AppException(ERROR_CODES.BILLING_PAYMENT_DECLINED, {
+          message: error.message,
+        });
+      }
+
+      throw new AppException(ERROR_CODES.BILLING_GATEWAY_ERROR, {
+        cause: error,
+      });
+    }
+
+    checkout.providerSessionId = result.providerSubscriptionId;
+    checkout.providerCardToken = result.cardToken;
     await checkouts.save(checkout);
+
+    // Same event (and inbox key) the gateway's webhook will send for this
+    // charge, so whichever arrives second is a no-op.
+    if (result.firstPayment.status === 'PAID') {
+      await this.processEvent(provider.name, {
+        type: 'INVOICE_PAID',
+        externalEventId: `payment:${result.firstPayment.id}:paid`,
+        providerSubscriptionId: result.providerSubscriptionId,
+        providerCustomerId: result.providerCustomerId,
+        invoiceId: result.firstPayment.id,
+        amountCents: result.firstPayment.amountCents,
+        currentPeriodEnd: null,
+        periodStart: result.firstPayment.dueDate,
+      });
+    }
 
     return {
       checkoutId: checkout.id,
-      checkoutUrl: session.checkoutUrl,
-      amountCents,
+      status: result.firstPayment.status === 'PAID' ? 'ACTIVE' : 'PENDING',
+      planCode: plan.code,
+      amountCents: price.totalCents,
     };
   }
 
-  /** Cancels at period end; the provider's SUBSCRIPTION_CANCELED downgrades. */
+  /**
+   * Stops renewals now; the plan stays until the paid period ends, when
+   * BillingJobs downgrades. Installment plans have nothing live at the
+   * gateway (the year is already charged): only the renewal is turned off.
+   */
   async cancel(auth: AuthPayload) {
     this.assertOwner(auth);
     const provider = this.requireProvider();
@@ -239,7 +482,9 @@ export class BillingService {
       throw new AppException(ERROR_CODES.BILLING_NO_SUBSCRIPTION);
     }
 
-    await provider.cancelSubscription(subscription.providerSubscriptionId);
+    if (subscription.installmentCount === 1) {
+      await provider.cancelSubscription(subscription.providerSubscriptionId);
+    }
     subscription.cancelAtPeriodEnd = true;
     await subscriptions.save(subscription);
 
@@ -247,6 +492,138 @@ export class BillingService {
       cancelAtPeriodEnd: true,
       currentPeriodEnd: subscription.currentPeriodEnd,
     };
+  }
+
+  /** Hourly (BillingScheduler): ends paid periods, renews installment plans. */
+  async runScheduledJobs(now = new Date()) {
+    return {
+      renewed: await this.renewInstallmentPlans(now),
+      downgraded: await this.expireEndedPeriods(now),
+    };
+  }
+
+  /**
+   * Canceled subscriptions keep the plan until the paid period ends; a refused
+   * installment renewal gets RENEWAL_GRACE_DAYS to be paid again.
+   */
+  private async expireEndedPeriods(now: Date) {
+    const graceEnd = new Date(now.getTime() - RENEWAL_GRACE_DAYS * DAY_MS);
+    const ended = await this.dataSource
+      .getRepository(SubscriptionEntity)
+      .createQueryBuilder('sub')
+      // Still on the plan this subscription granted: not downgraded yet.
+      .innerJoin(
+        CompanyEntity,
+        'company',
+        'company.id = sub.companyId AND company.planId = sub.planId',
+      )
+      .where('sub.currentPeriodEnd <= :now', { now })
+      .andWhere(
+        new Brackets((qb) =>
+          qb
+            .where("sub.status = 'CANCELED'")
+            .orWhere('sub.cancelAtPeriodEnd = true')
+            .orWhere(
+              "sub.status = 'PAST_DUE' AND sub.installmentCount > 1 AND sub.currentPeriodEnd <= :graceEnd",
+              { graceEnd },
+            ),
+        ),
+      )
+      .getMany();
+
+    for (const subscription of ended) {
+      await this.dataSource.transaction(async (manager) => {
+        await manager
+          .getRepository(SubscriptionEntity)
+          .update({ id: subscription.id }, { status: 'CANCELED' });
+        await downgrade(manager, subscription);
+      });
+    }
+
+    return ended.length;
+  }
+
+  /**
+   * Installment plans have no recurring contract at the gateway: at the end
+   * of each year we charge the same total and split with the stored card
+   * token. Refused → PAST_DUE (plan kept for the grace period).
+   */
+  private async renewInstallmentPlans(now: Date) {
+    const provider = this.provider;
+    if (!provider) return 0;
+
+    const due = await this.dataSource.getRepository(SubscriptionEntity).find({
+      where: {
+        provider: provider.name,
+        status: 'ACTIVE',
+        cancelAtPeriodEnd: false,
+        installmentCount: MoreThan(1),
+        currentPeriodEnd: LessThanOrEqual(now),
+        providerCardToken: Not(IsNull()),
+        providerCustomerId: Not(IsNull()),
+      },
+      relations: { plan: true },
+    });
+    const checkouts = this.dataSource.getRepository(BillingCheckoutEntity);
+    let renewed = 0;
+
+    for (const subscription of due) {
+      const periodStart = subscription.currentPeriodEnd!.toISOString();
+      const checkout = await checkouts.save(
+        checkouts.create({
+          companyId: subscription.companyId,
+          planId: subscription.planId,
+          billingCycle: subscription.billingCycle,
+          amountCents: subscription.amountCents,
+          feeCents: subscription.feeCents,
+          installmentCount: subscription.installmentCount,
+          provider: provider.name,
+          createdBy: null,
+        }),
+      );
+
+      try {
+        const charge = await provider.chargeCardToken({
+          providerCustomerId: subscription.providerCustomerId!,
+          cardToken: subscription.providerCardToken!,
+          amountCents: subscription.amountCents,
+          installmentCount: subscription.installmentCount,
+          description: `LinkBuds ${subscription.plan.name} (anual, renovação)`,
+          // One charge per subscription and period, even across retries.
+          reference: `renewal:${subscription.id}:${periodStart.slice(0, 10)}`,
+        });
+        checkout.providerSessionId = charge.providerChargeId;
+        await checkouts.save(checkout);
+        await this.processEvent(provider.name, {
+          type: 'INVOICE_PAID',
+          externalEventId: `payment:${charge.firstPaymentId}:paid`,
+          providerSubscriptionId: charge.providerChargeId,
+          invoiceId: charge.firstPaymentId,
+          amountCents: subscription.amountCents,
+          currentPeriodEnd: null,
+          // The new year starts where the paid one ended, not when the job ran.
+          periodStart,
+        });
+        renewed += 1;
+      } catch (error) {
+        checkout.status = 'FAILED';
+        await checkouts.save(checkout);
+
+        if (error instanceof PaymentDeclinedError) {
+          await this.dataSource
+            .getRepository(SubscriptionEntity)
+            .update({ id: subscription.id }, { status: 'PAST_DUE' });
+        } else {
+          // Gateway/infra error: next run retries; `reference` prevents a 2nd charge.
+          this.logger.error(
+            `Renewal of subscription ${subscription.id} failed`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+    }
+
+    return renewed;
   }
 
   /**
@@ -259,7 +636,7 @@ export class BillingService {
     headers: IncomingHttpHeaders,
   ) {
     const provider = this.requireProvider();
-    let event: BillingEvent;
+    let event: BillingEvent | null;
 
     try {
       if (providerName !== provider.name || !rawBody)
@@ -269,12 +646,21 @@ export class BillingService {
       throw new AppException(ERROR_CODES.BILLING_WEBHOOK_INVALID);
     }
 
+    if (!event) {
+      return { received: true, ignored: true };
+    }
+
+    return this.processEvent(provider.name, event);
+  }
+
+  /** Inbox + apply in one transaction; shared by webhooks and API responses. */
+  private async processEvent(providerName: string, event: BillingEvent) {
     const inbox = this.dataSource.getRepository(WebhookEventEntity);
     await inbox
       .createQueryBuilder()
       .insert()
       .values({
-        provider: provider.name,
+        provider: providerName,
         externalEventId: event.externalEventId,
         type: event.type,
         payload: event as never,
@@ -282,7 +668,7 @@ export class BillingService {
       .orIgnore()
       .execute();
     const stored = await inbox.findOneByOrFail({
-      provider: provider.name,
+      provider: providerName,
       externalEventId: event.externalEventId,
     });
 
@@ -292,7 +678,7 @@ export class BillingService {
 
     try {
       await this.dataSource.transaction(async (manager) => {
-        await this.applyEvent(manager, provider.name, event);
+        await this.applyEvent(manager, providerName, event);
         await manager
           .getRepository(WebhookEventEntity)
           .update({ id: stored.id }, { processedAt: new Date(), error: null });
@@ -314,61 +700,52 @@ export class BillingService {
     event: BillingEvent,
   ) {
     const subscriptions = manager.getRepository(SubscriptionEntity);
-    const key = (suffix: string) =>
-      `${provider}:${event.externalEventId}:${suffix}`;
-    const findSubscription = async (providerSubscriptionId: string) =>
-      subscriptions.findOneByOrFail({ providerSubscriptionId });
+    /** Per gateway invoice, so failed-then-paid charges the invoice once. */
+    const key = (reference: string, suffix: string) =>
+      `${provider}:${reference}:${suffix}`;
+    // Providers only emit events for what we created; an unknown subscription
+    // means the API response is still being saved: throw so the gateway retries.
+    // Installment plans get a new gateway id each renewal: older ids are
+    // found through the checkout that created them.
+    const findSubscription = async (providerSubscriptionId: string) => {
+      const direct = await subscriptions.findOneBy({
+        provider,
+        providerSubscriptionId,
+      });
+      if (direct) return direct;
+
+      const checkout = await manager
+        .getRepository(BillingCheckoutEntity)
+        .findOneByOrFail({
+          provider,
+          providerSessionId: providerSubscriptionId,
+        });
+
+      return subscriptions.findOneByOrFail({ companyId: checkout.companyId });
+    };
 
     switch (event.type) {
-      case 'CHECKOUT_COMPLETED': {
-        const checkouts = manager.getRepository(BillingCheckoutEntity);
-        const checkout = await checkouts.findOneByOrFail({
-          providerSessionId: event.providerSessionId,
-        });
-        const existing = await subscriptions.findOneBy({
-          companyId: checkout.companyId,
-        });
-        const subscription = await subscriptions.save(
-          subscriptions.merge(existing ?? subscriptions.create(), {
-            companyId: checkout.companyId,
-            planId: checkout.planId,
-            status: 'ACTIVE',
-            billingCycle: checkout.billingCycle,
-            amountCents: event.amountCents,
-            provider,
-            providerCustomerId: event.providerCustomerId,
-            providerSubscriptionId: event.providerSubscriptionId,
-            currentPeriodEnd: new Date(event.currentPeriodEnd),
-            cancelAtPeriodEnd: false,
-          }),
-        );
-        checkout.status = 'COMPLETED';
-        await checkouts.save(checkout);
-        await manager
-          .getRepository(CompanyEntity)
-          .update({ id: checkout.companyId }, { planId: checkout.planId });
-        await this.recordPayment(
-          manager,
-          subscription,
-          event.amountCents,
-          key,
-          provider,
-          event.providerSessionId,
-        );
-        return;
-      }
       case 'INVOICE_PAID': {
-        const subscription = await findSubscription(
-          event.providerSubscriptionId,
-        );
+        const known = await subscriptions.findOneBy({
+          provider,
+          providerSubscriptionId: event.providerSubscriptionId,
+        });
+        // A new contract (first purchase or installment renewal) is charged
+        // as one total: the checkout knows it, a single parcel does not.
+        const activated = known
+          ? null
+          : await this.activateCheckout(manager, provider, event);
+        const subscription = known ?? activated!.subscription;
         subscription.status = 'ACTIVE';
-        subscription.currentPeriodEnd = new Date(event.currentPeriodEnd);
+        subscription.currentPeriodEnd = periodEnd(
+          event,
+          subscription.billingCycle,
+        );
         await subscriptions.save(subscription);
         await this.recordPayment(
           manager,
           subscription,
-          event.amountCents,
-          key,
+          activated?.amountCents ?? event.amountCents,
           provider,
           event.invoiceId,
         );
@@ -388,7 +765,7 @@ export class BillingService {
           description: 'Cobrança da assinatura (pagamento falhou)',
           provider,
           providerReference: event.invoiceId,
-          idempotencyKey: key('charge'),
+          idempotencyKey: key(event.invoiceId, 'charge'),
         });
         return;
       }
@@ -397,13 +774,15 @@ export class BillingService {
           event.providerSubscriptionId,
         );
         subscription.status = 'CANCELED';
+        subscription.cancelAtPeriodEnd = true;
         await subscriptions.save(subscription);
-        const freePlan = await manager
-          .getRepository(PlanEntity)
-          .findOneByOrFail({ code: DEFAULT_PLAN_CODE });
-        await manager
-          .getRepository(CompanyEntity)
-          .update({ id: subscription.companyId }, { planId: freePlan.id });
+        // Paid time is kept: BillingJobs downgrades when the period ends.
+        if (
+          !subscription.currentPeriodEnd ||
+          subscription.currentPeriodEnd <= new Date()
+        ) {
+          await downgrade(manager, subscription);
+        }
         return;
       }
       case 'REFUNDED': {
@@ -418,18 +797,59 @@ export class BillingService {
           description: 'Estorno',
           provider,
           providerReference: event.refundId,
-          idempotencyKey: key('refund'),
+          idempotencyKey: key(event.refundId, 'refund'),
         });
         return;
       }
     }
   }
 
+  /** First paid charge of a checkout: the company switches to its plan. */
+  private async activateCheckout(
+    manager: EntityManager,
+    provider: string,
+    event: Extract<BillingEvent, { type: 'INVOICE_PAID' }>,
+  ) {
+    const checkouts = manager.getRepository(BillingCheckoutEntity);
+    const subscriptions = manager.getRepository(SubscriptionEntity);
+    const checkout = await checkouts.findOneByOrFail({
+      provider,
+      providerSessionId: event.providerSubscriptionId,
+    });
+    const existing = await subscriptions.findOneBy({
+      companyId: checkout.companyId,
+    });
+    const subscription = await subscriptions.save(
+      subscriptions.merge(existing ?? subscriptions.create(), {
+        companyId: checkout.companyId,
+        planId: checkout.planId,
+        status: 'ACTIVE',
+        billingCycle: checkout.billingCycle,
+        amountCents: checkout.amountCents,
+        feeCents: checkout.feeCents,
+        installmentCount: checkout.installmentCount,
+        provider,
+        providerCustomerId:
+          event.providerCustomerId ?? existing?.providerCustomerId ?? null,
+        providerSubscriptionId: event.providerSubscriptionId,
+        providerCardToken:
+          checkout.providerCardToken ?? existing?.providerCardToken ?? null,
+        cancelAtPeriodEnd: false,
+      }),
+    );
+    checkout.status = 'COMPLETED';
+    await checkouts.save(checkout);
+    await manager
+      .getRepository(CompanyEntity)
+      .update({ id: checkout.companyId }, { planId: checkout.planId });
+
+    return { subscription, amountCents: checkout.amountCents };
+  }
+
   private async recordPayment(
     manager: EntityManager,
     subscription: SubscriptionEntity,
     amountCents: number,
-    key: (suffix: string) => string,
     provider: string,
     reference: string,
   ) {
@@ -437,24 +857,33 @@ export class BillingService {
       return;
     }
 
+    // Breakdown as charged, frozen in the entry (subscriptions change later).
+    const feeCents =
+      amountCents === subscription.amountCents ? subscription.feeCents : null;
     const base = {
       companyId: subscription.companyId,
       subscriptionId: subscription.id,
       amountCents,
       provider,
       providerReference: reference,
+      metadata: {
+        planId: subscription.planId,
+        billingCycle: subscription.billingCycle,
+        installmentCount: subscription.installmentCount,
+        feeCents,
+      },
     };
     await this.appendLedger(manager, {
       ...base,
       type: 'CHARGE',
       description: `Assinatura (${subscription.billingCycle === 'YEARLY' ? 'anual' : 'mensal'})`,
-      idempotencyKey: key('charge'),
+      idempotencyKey: `${provider}:${reference}:charge`,
     });
     await this.appendLedger(manager, {
       ...base,
       type: 'PAYMENT',
       description: 'Pagamento recebido',
-      idempotencyKey: key('payment'),
+      idempotencyKey: `${provider}:${reference}:payment`,
     });
   }
 
@@ -471,54 +900,16 @@ export class BillingService {
       | 'provider'
       | 'providerReference'
       | 'idempotencyKey'
-    >,
+    > &
+      Partial<Pick<LedgerEntryEntity, 'metadata'>>,
   ) {
     await manager
       .getRepository(LedgerEntryEntity)
       .createQueryBuilder()
       .insert()
-      .values(entry)
+      // jsonb column: TypeORM's deep-partial typing can't express it.
+      .values(entry as never)
       .orIgnore()
       .execute();
-  }
-
-  /**
-   * Dev only (BILLING_PROVIDER=fake): simulates the gateway approving a
-   * checkout by sending a signed webhook through the real pipeline.
-   */
-  async completeFakeCheckout(auth: AuthPayload, providerSessionId: string) {
-    this.assertOwner(auth);
-    const provider = this.requireProvider();
-
-    if (!(provider instanceof FakePaymentProvider)) {
-      throw new AppException(ERROR_CODES.BILLING_CHECKOUT_NOT_FOUND);
-    }
-
-    const checkout = await this.dataSource
-      .getRepository(BillingCheckoutEntity)
-      .findOneBy({ providerSessionId, companyId: auth.companyId });
-
-    if (!checkout) {
-      throw new AppException(ERROR_CODES.BILLING_CHECKOUT_NOT_FOUND);
-    }
-
-    const periodEnd = new Date();
-    periodEnd.setMonth(
-      periodEnd.getMonth() + (checkout.billingCycle === 'YEARLY' ? 12 : 1),
-    );
-    const event: BillingEvent = {
-      type: 'CHECKOUT_COMPLETED',
-      externalEventId: `fake_evt_${checkout.id}`,
-      providerSessionId,
-      providerCustomerId: `fake_cus_${checkout.companyId}`,
-      providerSubscriptionId: `fake_sub_${checkout.companyId}`,
-      amountCents: checkout.amountCents,
-      currentPeriodEnd: periodEnd.toISOString(),
-    };
-    const body = JSON.stringify(event);
-
-    return this.handleWebhook(provider.name, Buffer.from(body), {
-      [FAKE_SIGNATURE_HEADER]: signFakePayload(body),
-    });
   }
 }

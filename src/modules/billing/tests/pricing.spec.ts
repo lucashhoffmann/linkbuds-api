@@ -1,4 +1,4 @@
-import { priceFor } from '../domain/pricing';
+import { priceFor, withCardFee } from '../domain/pricing';
 
 const free = { id: 'free', priceCents: 0 } as never;
 const agency = { id: 'agency', priceCents: 18000 } as never;
@@ -48,5 +48,31 @@ describe('priceFor', () => {
 
     expect(priceFor(company, agency, 'MONTHLY', now)).toBe(0);
     expect(priceFor(company, agency, 'YEARLY', now)).toBe(0);
+  });
+});
+
+describe('withCardFee', () => {
+  const asaas = { percent: 2.99, fixedCents: 49 };
+
+  it('grosses up so the net after the gateway fee covers the price', () => {
+    for (const base of [100, 4990, 18000, 162000, 999999]) {
+      const { totalCents, feeCents } = withCardFee(base, asaas);
+      const gatewayFee = Math.round((totalCents * 2.99) / 100 + 49);
+
+      expect(totalCents - gatewayFee).toBeGreaterThanOrEqual(base);
+      expect(totalCents - gatewayFee - base).toBeLessThanOrEqual(1);
+      expect(feeCents).toBe(totalCents - base);
+    }
+  });
+
+  it('matches the sandbox: R$ 49,90 net → R$ 51,95 charged', () => {
+    expect(withCardFee(4990, asaas).totalCents).toBe(5195);
+  });
+
+  it('charges nothing extra when there is no fee or no price', () => {
+    expect(withCardFee(4990, { percent: 0, fixedCents: 0 }).totalCents).toBe(
+      4990,
+    );
+    expect(withCardFee(0, asaas).totalCents).toBe(0);
   });
 });

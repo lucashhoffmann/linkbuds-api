@@ -1,12 +1,15 @@
 import { Module } from '@nestjs/common';
+import { BillingScheduler } from './application/billing-scheduler';
 import { BillingService } from './application/billing.service';
 import { CouponsService } from './application/coupons.service';
 import { PAYMENT_PROVIDER } from './application/payment-provider';
+import { AsaasPaymentProvider } from './infra/asaas-payment.provider';
 import { FakePaymentProvider } from './infra/fake-payment.provider';
 import {
   AdminCouponsController,
   BillingController,
   BillingWebhookController,
+  PublicQuoteController,
 } from './presentation/billing.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingCheckoutEntity } from './domain/entities/billing-checkout.entity';
@@ -24,6 +27,10 @@ import { WebhookEventEntity } from './domain/entities/webhook-event.entity';
  */
 function paymentProviderFactory() {
   const name = process.env.BILLING_PROVIDER?.trim();
+
+  if (name === 'asaas') {
+    return AsaasPaymentProvider.fromEnv();
+  }
 
   if (name === 'fake') {
     if (process.env.NODE_ENV === 'production') {
@@ -54,11 +61,13 @@ function paymentProviderFactory() {
   ],
   controllers: [
     BillingController,
+    PublicQuoteController,
     BillingWebhookController,
     AdminCouponsController,
   ],
   providers: [
     BillingService,
+    BillingScheduler,
     CouponsService,
     { provide: PAYMENT_PROVIDER, useFactory: paymentProviderFactory },
   ],

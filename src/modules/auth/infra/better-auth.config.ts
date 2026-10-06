@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import * as argon2 from 'argon2';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { BetterAuthOptions } from 'better-auth';
+import { resetPasswordEmail, sendEmail } from './send-email';
 
 export const BETTER_AUTH_BASE_PATH = '/api/auth';
 
@@ -108,6 +109,14 @@ export function buildBetterAuthOptions(env: Env = process.env) {
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 6,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: ({
+        user,
+        url,
+      }: {
+        user: BetterAuthUser;
+        url: string;
+      }) => sendEmail(resetPasswordEmail(user.email, url), env),
       password: {
         hash: (password: string) => argon2.hash(password),
         verify: ({ hash, password }: { hash: string; password: string }) =>

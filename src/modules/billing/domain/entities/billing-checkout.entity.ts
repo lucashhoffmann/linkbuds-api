@@ -24,6 +24,23 @@ export class BillingCheckoutEntity {
   @Column({ name: 'amount_cents', type: 'integer' })
   amountCents!: number;
 
+  /** Part of amountCents that is the card fee passed to the payer. */
+  @Column({ name: 'fee_cents', type: 'integer', default: 0 })
+  feeCents!: number;
+
+  /** Card installments (yearly only); 1 = single charge / recurring. */
+  @Column({ name: 'installment_count', type: 'integer', default: 1 })
+  installmentCount!: number;
+
+  /** Gateway card token from this charge, handed to the subscription. */
+  @Column({
+    name: 'provider_card_token',
+    type: 'varchar',
+    length: 160,
+    nullable: true,
+  })
+  providerCardToken!: string | null;
+
   @Column({ name: 'provider', length: 40 })
   provider!: string;
 
@@ -39,7 +56,7 @@ export class BillingCheckoutEntity {
   checkoutUrl!: string | null;
 
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'OPEN' })
-  status!: 'OPEN' | 'COMPLETED' | 'EXPIRED';
+  status!: 'OPEN' | 'COMPLETED' | 'EXPIRED' | 'FAILED';
 
   @Column({ name: 'created_by', type: 'text', nullable: true })
   createdBy!: string | null;

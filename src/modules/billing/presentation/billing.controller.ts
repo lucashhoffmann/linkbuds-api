@@ -3,7 +3,9 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Req,
@@ -21,15 +23,25 @@ import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { BillingService } from '../application/billing.service';
 import { CouponsService } from '../application/coupons.service';
 import {
-  checkoutDto,
   createCouponDto,
   redeemCouponDto,
+  subscribeDto,
   updateCouponDto,
-  type CheckoutDto,
   type CreateCouponDto,
   type RedeemCouponDto,
+  type SubscribeDto,
   type UpdateCouponDto,
 } from '../application/dto/billing.dto';
+
+/** Payer's IP for the gateway's anti-fraud: first hop behind the proxy. */
+function clientIp(request: { headers: IncomingHttpHeaders; ip?: string }) {
+  const forwarded = request.headers['x-forwarded-for'];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+    ?.split(',')[0]
+    ?.trim();
+
+  return first || request.ip?.replace(/^::ffff:/, '') || '0.0.0.0';
+}
 
 @Controller('billing')
 @UseGuards(AuthGuard)
@@ -45,13 +57,35 @@ export class BillingController {
     return this.billingService.overview(auth);
   }
 
-  @Post('checkout')
-  checkout(
+  /** History entry details: plan vs fee, card, receipt. */
+  @Get('ledger/:id')
+  ledgerEntry(
     @GetAuth() auth: AuthPayload,
-    @Body(new ZodValidationPipe(checkoutDto)) dto: CheckoutDto,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.billingService.ledgerEntry(auth, id);
+  }
+
+  /** Plan prices with the card fee included (what the payer will see charged). */
+  @Get('quote')
+  quote(@GetAuth() auth: AuthPayload) {
+    return this.billingService.companyQuote(auth);
+  }
+
+  @Post('subscribe')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  subscribe(
+    @GetAuth() auth: AuthPayload,
+    @Body(new ZodValidationPipe(subscribeDto)) dto: SubscribeDto,
+    @Req() request: { headers: IncomingHttpHeaders; ip?: string },
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.billingService.checkout(auth, dto, idempotencyKey);
+    return this.billingService.subscribe(
+      auth,
+      dto,
+      clientIp(request),
+      idempotencyKey,
+    );
   }
 
   @Post('cancel')
@@ -67,14 +101,18 @@ export class BillingController {
   ) {
     return this.couponsService.redeem(auth, dto);
   }
+}
 
-  /** Dev only: approves a fake-provider checkout. */
-  @Post('fake/checkouts/:sessionId/complete')
-  completeFakeCheckout(
-    @GetAuth() auth: AuthPayload,
-    @Param('sessionId') sessionId: string,
-  ) {
-    return this.billingService.completeFakeCheckout(auth, sessionId);
+/** Catalog prices with the card fee, for the public plans dialog. */
+@Controller('billing/quote/public')
+@UseInterceptors(TransformResponseInterceptor)
+@Throttle({ default: { limit: 30, ttl: 60000 } })
+export class PublicQuoteController {
+  constructor(private readonly billingService: BillingService) {}
+
+  @Get()
+  quote() {
+    return this.billingService.quote(null);
   }
 }
 
@@ -84,6 +122,7 @@ export class BillingWebhookController {
   constructor(private readonly billingService: BillingService) {}
 
   @Post(':provider')
+  @HttpCode(200)
   receive(
     @Param('provider') provider: string,
     @Req() request: { rawBody?: Buffer; headers: IncomingHttpHeaders },

@@ -120,6 +120,27 @@ export const ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Checkout não encontrado',
   },
+  BILLING_ALREADY_SUBSCRIBED: {
+    status: HttpStatus.CONFLICT,
+    message: 'Sua conta já tem uma assinatura ativa',
+  },
+  BILLING_QUOTE_CHANGED: {
+    status: HttpStatus.CONFLICT,
+    message: 'O valor mudou. Confira o novo total antes de pagar.',
+  },
+  BILLING_GATEWAY_ERROR: {
+    status: HttpStatus.BAD_GATEWAY,
+    message:
+      'Não conseguimos processar o pagamento agora. Tente novamente em alguns minutos.',
+  },
+  BILLING_PAYMENT_DECLINED: {
+    status: HttpStatus.PAYMENT_REQUIRED,
+    message: 'Pagamento recusado. Confira os dados do cartão.',
+  },
+  BILLING_ENTRY_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Lançamento não encontrado',
+  },
   BILLING_WEBHOOK_INVALID: {
     status: HttpStatus.BAD_REQUEST,
     message: 'Webhook inválido',

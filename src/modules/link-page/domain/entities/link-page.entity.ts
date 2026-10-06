@@ -118,6 +118,24 @@ export class LinkPageEntity {
   @Column({ name: 'footer_logo_url', type: 'text', nullable: true })
   footerLogoUrl!: string | null;
 
+  /** Owner's Google Tag Manager container (GTM-XXXX). Bio only; posts inherit. */
+  @Column({
+    name: 'gtm_container_id',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  gtmContainerId!: string | null;
+
+  /** Owner's GA4 measurement ID (G-XXXX). Bio only; posts inherit. */
+  @Column({
+    name: 'ga4_measurement_id',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  ga4MeasurementId!: string | null;
+
   @OneToMany(() => LinkPageLinkEntity, (link) => link.linkPage)
   links!: LinkPageLinkEntity[];
 

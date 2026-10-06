@@ -35,6 +35,7 @@ import {
   LinkPageLinkDto,
   LinkPageSocialLinkDto,
   ReorderItemsDto,
+  UpdateFooterDefaultDto,
   UpdateFooterDto,
   UpdateLinkPageDto,
   UpdateLinkPageImageDto,
@@ -50,6 +51,16 @@ import {
   toSocialLinkResponse,
 } from './link-page.mapper';
 import { PublicLinkPageCacheService } from './public-link-page-cache.service';
+
+function pickFooter(source: {
+  footerMode: LinkPageFooterMode;
+  footerText: string | null;
+  footerUrl: string | null;
+  footerLogoUrl: string | null;
+}) {
+  const { footerMode, footerText, footerUrl, footerLogoUrl } = source;
+  return { footerMode, footerText, footerUrl, footerLogoUrl };
+}
 
 type AnalyticsRange = {
   from: Date;
@@ -68,6 +79,9 @@ type PublicLinkPageResponse = {
   parentSlug: string | null;
   postNetwork: LinkPageEntity['postNetwork'];
   postUrl: string | null;
+  /** Always the bio's: posts inherit tracking. */
+  gtmContainerId: string | null;
+  ga4MeasurementId: string | null;
   name: string;
   slug: string;
   status: LinkPageStatus;
@@ -444,6 +458,9 @@ export class LinkPageService {
     } as const;
 
     return this.createAnalyticsBaseQuery(linkPageId, range)
+      .andWhere('event.eventType = :eventType', {
+        eventType: AnalyticsEventType.PAGE_VIEW,
+      })
       .select(columnByGroup[group], 'label')
       .addSelect('COUNT(*)', 'count')
       .groupBy(columnByGroup[group])
@@ -508,6 +525,8 @@ export class LinkPageService {
         status: LinkPageStatus.ACTIVE,
         layout: dto.layout,
         title: dto.title ?? dto.name,
+        // Lost white-label: fall back to the entity default (LINKBUDS).
+        ...(entitlementsFor(company).whiteLabel ? pickFooter(company) : {}),
       });
 
       try {
@@ -544,11 +563,19 @@ export class LinkPageService {
       }
     }
 
-    const { postNetwork, postUrl, ...pageFields } = dto;
+    const {
+      postNetwork,
+      postUrl,
+      gtmContainerId,
+      ga4MeasurementId,
+      ...pageFields
+    } = dto;
     Object.assign(
       page,
       pageFields,
-      page.type === LinkPageType.POST ? { postNetwork, postUrl } : {},
+      page.type === LinkPageType.POST
+        ? { postNetwork, postUrl }
+        : { gtmContainerId, ga4MeasurementId },
     );
 
     try {
@@ -661,6 +688,39 @@ export class LinkPageService {
     await this.invalidatePublicPageCache(page);
 
     return detail;
+  }
+
+  async getFooterDefault(auth: AuthPayload) {
+    return pickFooter(await this.getCompany(auth));
+  }
+
+  async updateFooterDefault(auth: AuthPayload, dto: UpdateFooterDefaultDto) {
+    const company = await this.getCompany(auth);
+
+    if (dto.footerMode !== LinkPageFooterMode.LINKBUDS) {
+      assertEntitled(company, 'whiteLabel');
+    }
+
+    const footer = {
+      footerMode: dto.footerMode,
+      footerText: dto.footerText ?? null,
+      footerUrl: dto.footerUrl ?? null,
+      footerLogoUrl: dto.footerLogoUrl ?? null,
+    };
+
+    await this.companyRepository.update(company.id, footer);
+
+    if (dto.applyToExisting) {
+      await this.linkPageRepository.update({ companyId: company.id }, footer);
+      // Bio invalidation also clears its posts (prefix).
+      const bios = await this.linkPageRepository.find({
+        select: { slug: true, parentPageId: true },
+        where: { companyId: company.id, parentPageId: IsNull() },
+      });
+      await Promise.all(bios.map((bio) => this.invalidatePublicPageCache(bio)));
+    }
+
+    return footer;
   }
 
   async createLink(
@@ -1361,6 +1421,8 @@ export class LinkPageService {
       parentSlug: postSlug ? slug : null,
       postNetwork: detail.postNetwork,
       postUrl: detail.postUrl,
+      gtmContainerId: bio!.gtmContainerId,
+      ga4MeasurementId: bio!.ga4MeasurementId,
       links: detail.links,
       socialLinks: detail.socialLinks,
       images: detail.images,

@@ -2,6 +2,7 @@ import {
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
+  updateLinkPageDto,
   updateLinkPageImageDto,
   updateLinkPageLinkDto,
   updateLinkPageSocialLinkDto,
@@ -49,5 +50,24 @@ describe('LinkPage DTOs', () => {
     expect(updateLinkPageImageDto.parse({ active: false })).toEqual({
       active: false,
     });
+  });
+
+  it('accepts only GTM/GA4 ID formats (they end up inside a script tag)', () => {
+    expect(
+      updateLinkPageDto.parse({
+        gtmContainerId: ' gtm-abc123 ',
+        ga4MeasurementId: 'g-XYZ7890',
+      }),
+    ).toEqual({ gtmContainerId: 'GTM-ABC123', ga4MeasurementId: 'G-XYZ7890' });
+    expect(updateLinkPageDto.parse({ gtmContainerId: '' })).toEqual({
+      gtmContainerId: null,
+    });
+    expect(
+      updateLinkPageDto.safeParse({ gtmContainerId: "GTM-1');alert(1)//" })
+        .success,
+    ).toBe(false);
+    expect(
+      updateLinkPageDto.safeParse({ ga4MeasurementId: 'UA-12345-1' }).success,
+    ).toBe(false);
   });
 });

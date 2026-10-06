@@ -31,3 +31,29 @@ export function priceFor(
     ? applyPercentOff(monthly * 12, YEARLY_DISCOUNT_PERCENT)
     : monthly;
 }
+
+/**
+ * Passes the gateway fee to the payer: a total whose fee (percent of total
+ * + fixed) leaves `baseCents` net, at most 1 cent over.
+ */
+export function withCardFee(
+  baseCents: number,
+  fee: { percent: number; fixedCents: number },
+) {
+  if (baseCents <= 0) {
+    return { baseCents, feeCents: 0, totalCents: baseCents };
+  }
+
+  let totalCents = Math.ceil(
+    (baseCents + fee.fixedCents) / (1 - fee.percent / 100),
+  );
+  // Gateways round their fee to cents; step up until the net covers the base.
+  while (
+    totalCents - Math.round((totalCents * fee.percent) / 100 + fee.fixedCents) <
+    baseCents
+  ) {
+    totalCents += 1;
+  }
+
+  return { baseCents, feeCents: totalCents - baseCents, totalCents };
+}

@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
   UseInterceptors,
@@ -23,6 +24,7 @@ import {
   linkPageLinkDto,
   linkPageSocialLinkDto,
   reorderItemsDto,
+  updateFooterDefaultDto,
   updateFooterDto,
   updateLinkPageDto,
   updateLinkPageImageDto,
@@ -34,6 +36,7 @@ import {
   type LinkPageLinkDto,
   type LinkPageSocialLinkDto,
   type ReorderItemsDto,
+  type UpdateFooterDefaultDto,
   type UpdateFooterDto,
   type UpdateLinkPageDto,
   type UpdateLinkPageImageDto,
@@ -61,6 +64,21 @@ export class LinkPageController {
     @Query('to') to?: string,
   ) {
     return this.linkPageService.overview(auth, from, to);
+  }
+
+  /** Company default footer (Configurações). Declared before `:id`. */
+  @Get('footer-default')
+  getFooterDefault(@GetAuth() auth: AuthPayload) {
+    return this.linkPageService.getFooterDefault(auth);
+  }
+
+  @Put('footer-default')
+  updateFooterDefault(
+    @GetAuth() auth: AuthPayload,
+    @Body(new ZodValidationPipe(updateFooterDefaultDto))
+    dto: UpdateFooterDefaultDto,
+  ) {
+    return this.linkPageService.updateFooterDefault(auth, dto);
   }
 
   @Get(':id')

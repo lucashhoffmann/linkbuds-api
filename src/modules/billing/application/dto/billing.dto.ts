@@ -1,10 +1,47 @@
 import { z } from 'zod';
 
-export const checkoutDto = z.object({
-  planCode: z.string().trim().min(1),
-  billingCycle: z.enum(['MONTHLY', 'YEARLY']).default('MONTHLY'),
-});
-export type CheckoutDto = z.infer<typeof checkoutDto>;
+const digits = (min: number, max: number, message: string) =>
+  z
+    .string()
+    .transform((value) => value.replace(/\D/g, ''))
+    .pipe(z.string().min(min, message).max(max, message));
+
+/** Card fields are forwarded to the gateway only: never logged or stored. */
+export const subscribeDto = z
+  .object({
+    planCode: z.string().trim().min(1),
+    billingCycle: z.enum(['MONTHLY', 'YEARLY']),
+    /** Total shown to the payer (quote); a different server total is refused. */
+    expectedTotalCents: z.number().int().positive(),
+    /** Card installments: yearly only. */
+    installmentCount: z.number().int().min(1).max(12).default(1),
+    holder: z.object({
+      name: z.string().trim().min(3).max(100),
+      email: z.email().max(160),
+      cpfCnpj: z
+        .string()
+        .transform((value) => value.replace(/\D/g, ''))
+        .refine((value) => value.length === 11 || value.length === 14, {
+          message: 'CPF ou CNPJ inválido',
+        }),
+      phone: digits(10, 11, 'Celular inválido'),
+      postalCode: digits(8, 8, 'CEP inválido'),
+      addressNumber: z.string().trim().min(1).max(10),
+      addressComplement: z.string().trim().max(60).optional(),
+    }),
+    card: z.object({
+      holderName: z.string().trim().min(3).max(60),
+      number: digits(13, 19, 'Número do cartão inválido'),
+      expiryMonth: z.string().regex(/^(0[1-9]|1[0-2])$/, 'Mês inválido'),
+      expiryYear: z.string().regex(/^20\d{2}$/, 'Ano inválido'),
+      ccv: z.string().regex(/^\d{3,4}$/, 'CVV inválido'),
+    }),
+  })
+  .refine(
+    (dto) => dto.installmentCount === 1 || dto.billingCycle === 'YEARLY',
+    { message: 'Parcelamento só no plano anual', path: ['installmentCount'] },
+  );
+export type SubscribeDto = z.infer<typeof subscribeDto>;
 
 export const redeemCouponDto = z.object({
   code: z

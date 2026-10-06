@@ -19,6 +19,7 @@ function createRepositoryMock() {
     findOne: jest.fn(),
     save: jest.fn((value) => Promise.resolve({ id: 'saved-id', ...value })),
     softDelete: jest.fn(),
+    update: jest.fn(),
   };
 }
 
@@ -211,6 +212,107 @@ describe('LinkPageService', () => {
       errorCode: ERROR_CODES.LINK_PAGE_FEATURE_FORBIDDEN,
     });
     expect(linkPageRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('copies the company default footer into new pages', async () => {
+    const { companyRepository, linkPageRepository, service } = createService();
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { maxClientPages: 2, whiteLabel: true },
+      footerMode: LinkPageFooterMode.CUSTOM,
+      footerText: 'Agência X',
+      footerUrl: 'https://agencia.x',
+      footerLogoUrl: null,
+    });
+    linkPageRepository.count.mockResolvedValue(0);
+
+    await service.create(auth, {
+      name: 'Cliente',
+      slug: 'cliente',
+      layout: LinkPageLayout.LAYOUT_1,
+    });
+
+    expect(linkPageRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        footerMode: LinkPageFooterMode.CUSTOM,
+        footerText: 'Agência X',
+      }),
+    );
+  });
+
+  it('ignores the default footer once white-label is lost', async () => {
+    const { companyRepository, linkPageRepository, service } = createService();
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { maxClientPages: 2, whiteLabel: false },
+      footerMode: LinkPageFooterMode.HIDDEN,
+    });
+    linkPageRepository.count.mockResolvedValue(0);
+
+    await service.create(auth, {
+      name: 'Cliente',
+      slug: 'cliente',
+      layout: LinkPageLayout.LAYOUT_1,
+    });
+
+    expect(linkPageRepository.save).toHaveBeenCalledWith(
+      expect.not.objectContaining({ footerMode: LinkPageFooterMode.HIDDEN }),
+    );
+  });
+
+  it('applies the default footer to existing pages on request', async () => {
+    const { companyRepository, linkPageRepository, publicCache, service } =
+      createService();
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { whiteLabel: true },
+    });
+    linkPageRepository.find.mockResolvedValue([
+      { slug: 'bio', parentPageId: null },
+    ]);
+    const footer = {
+      footerMode: LinkPageFooterMode.HIDDEN,
+      footerText: null,
+      footerUrl: null,
+      footerLogoUrl: null,
+    };
+
+    await service.updateFooterDefault(auth, {
+      ...footer,
+      applyToExisting: true,
+    });
+
+    expect(companyRepository.update).toHaveBeenCalledWith(
+      auth.companyId,
+      footer,
+    );
+    expect(linkPageRepository.update).toHaveBeenCalledWith(
+      { companyId: auth.companyId },
+      footer,
+    );
+    expect(publicCache.invalidateSlug).toHaveBeenCalledWith('bio');
+    expect(publicCache.invalidatePrefix).toHaveBeenCalledWith('bio/');
+  });
+
+  it('requires white-label for a non-LinkBuds default footer', async () => {
+    const { companyRepository, service } = createService();
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { whiteLabel: false },
+    });
+
+    await expect(
+      service.updateFooterDefault(auth, {
+        footerMode: LinkPageFooterMode.HIDDEN,
+        footerText: null,
+        footerUrl: null,
+        footerLogoUrl: null,
+        applyToExisting: false,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: ERROR_CODES.LINK_PAGE_FEATURE_FORBIDDEN,
+    });
+    expect(companyRepository.update).not.toHaveBeenCalled();
   });
 
   it('records public analytics events without an IP field', async () => {

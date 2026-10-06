@@ -63,6 +63,27 @@ export class SubscriptionEntity {
   @Column({ name: 'cancel_at_period_end', type: 'boolean', default: false })
   cancelAtPeriodEnd!: boolean;
 
+  /** Part of amountCents that is the card fee passed to the payer. */
+  @Column({ name: 'fee_cents', type: 'integer', default: 0 })
+  feeCents!: number;
+
+  /**
+   * 1 = recurring subscription at the gateway (it charges each cycle).
+   * >1 = yearly paid in card installments: one gateway charge per year,
+   * renewed by BillingJobs with the stored card token.
+   */
+  @Column({ name: 'installment_count', type: 'integer', default: 1 })
+  installmentCount!: number;
+
+  /** Gateway card token (never card data); used to renew installment plans. */
+  @Column({
+    name: 'provider_card_token',
+    type: 'varchar',
+    length: 160,
+    nullable: true,
+  })
+  providerCardToken!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
