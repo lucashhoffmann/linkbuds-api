@@ -963,6 +963,9 @@ describe('LinkPageService', () => {
       backgroundColor: '#FFFFFF',
       borderColor: '#E5E7EB',
       borderEnabled: true,
+      shape: 'PILL',
+      align: 'CENTER',
+      fullWidth: false,
       sortOrder: 0,
       active: true,
     });

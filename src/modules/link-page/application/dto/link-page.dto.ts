@@ -238,6 +238,9 @@ const linkPageLinkBaseDto = z.object({
   backgroundColor: colorSchema.default('#FFFFFF'),
   borderColor: colorSchema.default('#E5E7EB'),
   borderEnabled: z.boolean().default(false),
+  shape: z.enum(['ROUNDED', 'PILL', 'SQUARE']).default('ROUNDED'),
+  align: z.enum(['LEFT', 'CENTER']).default('LEFT'),
+  fullWidth: z.boolean().default(false),
   sortOrder: z.number().int().min(0).default(0),
   active: z.boolean().default(true),
 });

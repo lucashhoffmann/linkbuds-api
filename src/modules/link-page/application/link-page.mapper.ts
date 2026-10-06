@@ -46,6 +46,9 @@ export function toLinkPageLinkResponse(link: LinkPageLinkEntity) {
     backgroundColor: link.backgroundColor,
     borderColor: link.borderColor,
     borderEnabled: link.borderEnabled,
+    shape: link.shape,
+    align: link.align,
+    fullWidth: link.fullWidth,
     sortOrder: link.sortOrder,
     active: link.active,
   };

@@ -92,6 +92,16 @@ export class LinkPageLinkEntity {
   @Column({ name: 'border_enabled', type: 'boolean', default: false })
   borderEnabled!: boolean;
 
+  @Column({ name: 'shape', type: 'varchar', length: 10, default: 'ROUNDED' })
+  shape!: 'ROUNDED' | 'PILL' | 'SQUARE';
+
+  @Column({ name: 'align', type: 'varchar', length: 10, default: 'LEFT' })
+  align!: 'LEFT' | 'CENTER';
+
+  /** HORIZONTAL card fills the row instead of a carousel tile. */
+  @Column({ name: 'full_width', type: 'boolean', default: false })
+  fullWidth!: boolean;
+
   @Column({ name: 'sort_order', type: 'integer', nullable: false, default: 0 })
   sortOrder!: number;
 

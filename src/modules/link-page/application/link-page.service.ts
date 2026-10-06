@@ -391,8 +391,12 @@ export class LinkPageService {
     return company;
   }
 
-  private async getPageForCompany(companyId: string, id: string) {
-    const page = await this.linkPageRepository.findOne({
+  private async getPageForCompany(
+    companyId: string,
+    id: string,
+    linkPageRepository = this.linkPageRepository,
+  ) {
+    const page = await linkPageRepository.findOne({
       where: { id, companyId },
       relations: { parentPage: true },
     });
@@ -837,8 +841,12 @@ export class LinkPageService {
   }
 
   /** Post sub-page (/p/:bio/:post), styled like its bio at creation time. */
-  createPost(auth: AuthPayload, parentId: string, dto: CreatePostPageDto) {
-    return this.createSubPage(auth, parentId, {
+  async createPost(
+    auth: AuthPayload,
+    parentId: string,
+    dto: CreatePostPageDto,
+  ) {
+    const detail = await this.createSubPage(auth, parentId, {
       type: LinkPageType.POST,
       name: dto.name,
       slug: dto.slug,
@@ -846,6 +854,9 @@ export class LinkPageService {
       postNetwork: dto.postNetwork ?? null,
       postUrl: dto.postUrl ?? null,
     });
+    await this.invalidatePublicPageCache(detail);
+
+    return detail;
   }
 
   /** Form sub-page (/p/:bio/:form): same as a post, plus the default fields. */
@@ -854,25 +865,33 @@ export class LinkPageService {
     parentId: string,
     dto: CreateFormPageDto,
   ) {
-    const [company, usedForms] = await Promise.all([
-      this.getCompany(auth),
-      this.linkPageRepository.count({
+    // Company row lock serializes parallel creates: count + insert can't overshoot the quota.
+    const detail = await this.dataSource.transaction(async (manager) => {
+      const company = await this.getCompany(auth, manager, true);
+      const usedForms = await manager.getRepository(LinkPageEntity).count({
         where: { companyId: auth.companyId, type: LinkPageType.FORM },
-      }),
-    ]);
+      });
 
-    // ponytail: count-then-insert without a lock; two parallel creates can pass by one.
-    if (usedForms >= entitlementsFor(company).maxForms) {
-      throw new AppException(ERROR_CODES.LINK_PAGE_FORM_LIMIT_REACHED);
-    }
+      if (usedForms >= entitlementsFor(company).maxForms) {
+        throw new AppException(ERROR_CODES.LINK_PAGE_FORM_LIMIT_REACHED);
+      }
 
-    return this.createSubPage(auth, parentId, {
-      type: LinkPageType.FORM,
-      name: dto.name,
-      slug: dto.slug,
-      title: dto.title,
-      form: defaultFormConfig(),
+      return this.createSubPage(
+        auth,
+        parentId,
+        {
+          type: LinkPageType.FORM,
+          name: dto.name,
+          slug: dto.slug,
+          title: dto.title,
+          form: defaultFormConfig(),
+        },
+        manager,
+      );
     });
+    await this.invalidatePublicPageCache(detail);
+
+    return detail;
   }
 
   private async createSubPage(
@@ -883,14 +902,21 @@ export class LinkPageService {
         type: LinkPageType.POST | LinkPageType.FORM;
         title?: string;
       },
+    manager = this.dataSource.manager,
   ) {
-    const parent = await this.getPageForCompany(auth.companyId, parentId);
+    const linkPageRepository = manager.getRepository(LinkPageEntity);
+    // Same manager as the caller's transaction: a second pool connection here deadlocks under load.
+    const parent = await this.getPageForCompany(
+      auth.companyId,
+      parentId,
+      linkPageRepository,
+    );
 
     if (parent.parentPageId) {
       throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_PARENT);
     }
 
-    const existing = await this.linkPageRepository.findOne({
+    const existing = await linkPageRepository.findOne({
       where: { parentPageId: parent.id, slug: dto.slug },
     });
 
@@ -898,7 +924,7 @@ export class LinkPageService {
       throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
     }
 
-    const post = this.linkPageRepository.create({
+    const post = linkPageRepository.create({
       companyId: auth.companyId,
       parentPageId: parent.id,
       parentPage: parent,
@@ -935,10 +961,7 @@ export class LinkPageService {
     });
 
     try {
-      const detail = toLinkPageDetail(await this.linkPageRepository.save(post));
-      await this.invalidatePublicPageCache(detail);
-
-      return detail;
+      return toLinkPageDetail(await linkPageRepository.save(post));
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
