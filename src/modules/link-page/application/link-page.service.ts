@@ -3,7 +3,14 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { IncomingHttpHeaders } from 'node:http';
 import { isIP } from 'node:net';
-import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
+import {
+  Between,
+  DataSource,
+  EntityManager,
+  In,
+  IsNull,
+  Repository,
+} from 'typeorm';
 import { CompanyDomainEntity } from 'src/modules/company/domain/entities/company-domain.entity';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import { CompanyDomainStatus } from 'src/modules/company/domain/enums/company-domain-status.enum';
@@ -483,35 +490,53 @@ export class LinkPageService {
     range: AnalyticsRange,
   ) {
     const base = this.createAnalyticsBaseQuery(linkPageId, range);
-    const [pageViews, uniqueVisitors, totalClicks, averageDuration, onlineNow] =
-      await Promise.all([
-        base
-          .clone()
-          .andWhere('event.eventType = :eventType', {
-            eventType: AnalyticsEventType.PAGE_VIEW,
-          })
-          .getCount(),
-        base
-          .clone()
-          .select('COUNT(DISTINCT event.visitorId)', 'count')
-          .andWhere('event.visitorId IS NOT NULL')
-          .getRawOne<{ count: string }>(),
-        base
-          .clone()
-          .andWhere('event.eventType IN (:...eventTypes)', {
-            eventTypes: clickEventTypes,
-          })
-          .getCount(),
-        base
-          .clone()
-          .select('AVG(event.durationMs)', 'average')
-          .andWhere('event.eventType = :eventType', {
-            eventType: AnalyticsEventType.PAGE_EXIT,
-          })
-          .andWhere('event.durationMs IS NOT NULL')
-          .getRawOne<{ average: string | null }>(),
-        this.presenceService?.countOnline(linkPageId) ?? Promise.resolve(0),
-      ]);
+    const [
+      pageViews,
+      uniqueVisitors,
+      totalClicks,
+      averageDuration,
+      onlineNow,
+      formSubmissions,
+      formDuration,
+    ] = await Promise.all([
+      base
+        .clone()
+        .andWhere('event.eventType = :eventType', {
+          eventType: AnalyticsEventType.PAGE_VIEW,
+        })
+        .getCount(),
+      base
+        .clone()
+        .select('COUNT(DISTINCT event.visitorId)', 'count')
+        .andWhere('event.visitorId IS NOT NULL')
+        .getRawOne<{ count: string }>(),
+      base
+        .clone()
+        .andWhere('event.eventType IN (:...eventTypes)', {
+          eventTypes: clickEventTypes,
+        })
+        .getCount(),
+      base
+        .clone()
+        .select('AVG(event.durationMs)', 'average')
+        .andWhere('event.eventType = :eventType', {
+          eventType: AnalyticsEventType.PAGE_EXIT,
+        })
+        .andWhere('event.durationMs IS NOT NULL')
+        .getRawOne<{ average: string | null }>(),
+      this.presenceService?.countOnline(linkPageId) ?? Promise.resolve(0),
+      // Always 0 for non-form pages; indexed on (link_page_id, created_at).
+      this.submissionRepository.count({
+        where: { linkPageId, createdAt: Between(range.from, range.to) },
+      }),
+      this.submissionRepository
+        .createQueryBuilder('submission')
+        .select('AVG(submission.durationMs)', 'average')
+        .where('submission.linkPageId = :linkPageId', { linkPageId })
+        .andWhere('submission.createdAt BETWEEN :from AND :to', range)
+        .andWhere('submission.durationMs IS NOT NULL')
+        .getRawOne<{ average: string | null }>(),
+    ]);
 
     return {
       onlineNow,
@@ -520,6 +545,8 @@ export class LinkPageService {
       totalClicks,
       clickThroughRate: pageViews ? totalClicks / pageViews : 0,
       averageDurationMs: Math.round(Number(averageDuration?.average ?? 0)),
+      formSubmissions,
+      averageFormDurationMs: Math.round(Number(formDuration?.average ?? 0)),
     };
   }
 
@@ -781,7 +808,11 @@ export class LinkPageService {
   }
 
   /** Form sub-page (/p/:bio/:form): same as a post, plus the default fields. */
-  async createForm(auth: AuthPayload, parentId: string, dto: CreateFormPageDto) {
+  async createForm(
+    auth: AuthPayload,
+    parentId: string,
+    dto: CreateFormPageDto,
+  ) {
     const [company, usedForms] = await Promise.all([
       this.getCompany(auth),
       this.linkPageRepository.count({
@@ -1428,6 +1459,7 @@ export class LinkPageService {
         linkPageId,
         answers: result.answers,
         visitorId: dto.visitorId ?? null,
+        durationMs: dto.durationMs ?? null,
         ipAddress: resolveClientIp(context),
         countryCode:
           normalizeCountryCode(

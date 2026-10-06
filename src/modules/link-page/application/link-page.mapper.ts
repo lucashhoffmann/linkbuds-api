@@ -97,6 +97,7 @@ export function toFormSubmissionResponse(
     deviceType: submission.deviceType,
     browser: submission.browser,
     operatingSystem: submission.operatingSystem,
+    durationMs: submission.durationMs,
     webhookDeliveredAt: submission.webhookDeliveredAt,
     createdAt: submission.createdAt,
   };

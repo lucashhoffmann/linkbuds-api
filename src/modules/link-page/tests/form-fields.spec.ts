@@ -56,6 +56,22 @@ describe('validateFormAnswers', () => {
       invalid: ['nome', 'email', 'plano', 'aceite', 'nasc'],
     });
   });
+
+  it('accepts only http(s) links', () => {
+    const site: FormField[] = [
+      { id: 'site', type: 'URL', label: 'Site', required: true },
+    ];
+
+    expect(
+      validateFormAnswers(site, { site: 'https://exemplo.com/a?b=1' }),
+    ).toMatchObject({ ok: true });
+    for (const bad of ['exemplo.com', 'javascript:alert(1)', 'ftp://x.com']) {
+      expect(validateFormAnswers(site, { site: bad })).toEqual({
+        ok: false,
+        invalid: ['site'],
+      });
+    }
+  });
 });
 
 describe('formConfigSchema', () => {
@@ -75,6 +91,17 @@ describe('formConfigSchema', () => {
       }).success,
     ).toBe(false);
     expect(formConfigSchema.safeParse({ ...base, fields }).success).toBe(true);
+  });
+
+  it('accepts only an http(s) redirect, or none', () => {
+    const parse = (redirectUrl: unknown) =>
+      formConfigSchema.safeParse({ ...base, fields, redirectUrl }).success;
+
+    expect(parse('https://exemplo.com/obrigado')).toBe(true);
+    expect(parse(null)).toBe(true);
+    expect(parse(undefined)).toBe(true);
+    expect(parse('javascript:alert(1)')).toBe(false);
+    expect(parse('exemplo.com')).toBe(false);
   });
 });
 

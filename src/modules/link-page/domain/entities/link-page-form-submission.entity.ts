@@ -51,6 +51,10 @@ export class LinkPageFormSubmissionEntity {
   @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent!: string | null;
 
+  /** Time from opening the form to submitting it (client-measured). */
+  @Column({ name: 'duration_ms', type: 'integer', nullable: true })
+  durationMs!: number | null;
+
   /** Set once the Google Sheets webhook accepted it; null = pending/failed. */
   @Column({ name: 'webhook_delivered_at', type: 'timestamptz', nullable: true })
   webhookDeliveredAt!: Date | null;

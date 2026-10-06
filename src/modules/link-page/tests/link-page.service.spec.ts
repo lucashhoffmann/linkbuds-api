@@ -209,7 +209,10 @@ describe('LinkPageService', () => {
     linkPageRepository.count.mockResolvedValue(1);
 
     await expect(
-      service.createForm(auth, 'bio-id', { name: 'Orçamento', slug: 'orcamento' }),
+      service.createForm(auth, 'bio-id', {
+        name: 'Orçamento',
+        slug: 'orcamento',
+      }),
     ).rejects.toMatchObject({
       errorCode: ERROR_CODES.LINK_PAGE_FORM_LIMIT_REACHED,
     });

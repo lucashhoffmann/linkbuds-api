@@ -12,6 +12,7 @@ export type PricingPlanResponse = {
   label: string;
   description: string;
   maxClientPages: number | null;
+  customDomain: boolean;
   priceCents: number | null;
   priceLabel: string | null;
   features: string[];
@@ -32,6 +33,7 @@ const CUSTOM_CARD: PricingPlanResponse = {
   label: 'Sob medida',
   description: 'Condições especiais para agências que precisam ir além.',
   maxClientPages: null,
+  customDomain: true,
   priceCents: null,
   priceLabel: 'Sob consulta',
   features: [
@@ -67,6 +69,7 @@ export class GetPricingPlansUseCase {
           label: plan.label,
           description: plan.description,
           maxClientPages: plan.maxClientPages,
+          customDomain: plan.customDomain,
           priceCents: plan.priceCents,
           priceLabel: null,
           features: plan.features,

@@ -117,6 +117,8 @@ export const submitFormDto = z.object({
   ),
   visitorId: optionalText(120),
   website: z.string().max(200).optional(),
+  /** Time from opening the form to submitting; capped at 24h. */
+  durationMs: z.number().int().min(0).max(86_400_000).nullable().optional(),
 });
 
 export type SubmitFormDto = z.infer<typeof submitFormDto>;

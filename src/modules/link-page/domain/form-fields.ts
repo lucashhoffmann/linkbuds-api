@@ -6,6 +6,7 @@ export const FORM_FIELD_TYPES = [
   'TEXTAREA',
   'EMAIL',
   'PHONE',
+  'URL',
   'NUMBER',
   'DATE',
   'SELECT',
@@ -34,6 +35,16 @@ export const formConfigSchema = z
     fields: z.array(formFieldSchema).max(30),
     submitLabel: z.string().trim().min(1).max(40),
     successMessage: z.string().trim().min(1).max(300),
+    /** Animated check with the success message. Absent = on. */
+    successAnimation: z.boolean().optional(),
+    /** Optional: after the success message, the visitor is sent here. */
+    redirectUrl: z
+      .string()
+      .trim()
+      .max(2000)
+      .pipe(z.url({ protocol: /^https?$/ }))
+      .nullable()
+      .optional(),
   })
   .refine(
     (form) =>
@@ -70,6 +81,11 @@ const valueSchemas: Record<FormFieldType, z.ZodType<string | boolean>> = {
     .string()
     .trim()
     .regex(/^[0-9+()\-\s]{6,30}$/),
+  URL: z
+    .string()
+    .trim()
+    .max(2000)
+    .pipe(z.url({ protocol: /^https?$/ })),
   NUMBER: z
     .string()
     .trim()
