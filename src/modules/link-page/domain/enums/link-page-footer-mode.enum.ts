@@ -9,3 +9,9 @@ export enum LinkPageFooterStyle {
   PILL = 'PILL',
   BOX = 'BOX',
 }
+
+export enum LinkPageFooterSize {
+  SMALL = 'SMALL',
+  MEDIUM = 'MEDIUM',
+  LARGE = 'LARGE',
+}

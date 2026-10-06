@@ -5,6 +5,7 @@ import { AnalyticsEventType } from '../domain/enums/analytics-event-type.enum';
 import { AnalyticsTargetType } from '../domain/enums/analytics-target-type.enum';
 import {
   LinkPageFooterMode,
+  LinkPageFooterSize,
   LinkPageFooterStyle,
 } from '../domain/enums/link-page-footer-mode.enum';
 import { LinkPageMediaSize } from '../domain/enums/link-page-media-size.enum';
@@ -119,6 +120,16 @@ function createService(options?: {
   };
 }
 
+const defaultFooterStyle = {
+  footerStyle: LinkPageFooterStyle.TEXT,
+  footerBackgroundColor: null,
+  footerBorderColor: null,
+  footerColor: null,
+  footerBold: false,
+  footerFontSize: LinkPageFooterSize.SMALL,
+  footerLogoSize: LinkPageFooterSize.SMALL,
+};
+
 describe('LinkPageService', () => {
   const auth = { id: 'user-id', companyId: 'company-id', role: UserRole.OWNER };
 
@@ -222,6 +233,7 @@ describe('LinkPageService', () => {
         footerText: null,
         footerUrl: null,
         footerLogoUrl: null,
+        ...defaultFooterStyle,
       }),
     ).rejects.toMatchObject({
       errorCode: ERROR_CODES.LINK_PAGE_FEATURE_FORBIDDEN,
@@ -293,6 +305,10 @@ describe('LinkPageService', () => {
       footerStyle: LinkPageFooterStyle.PILL,
       footerBackgroundColor: '#000000',
       footerBorderColor: null,
+      footerColor: '#111111',
+      footerBold: true,
+      footerFontSize: LinkPageFooterSize.LARGE,
+      footerLogoSize: LinkPageFooterSize.MEDIUM,
     };
 
     await service.updateFooterDefault(auth, {
@@ -325,6 +341,7 @@ describe('LinkPageService', () => {
         footerText: null,
         footerUrl: null,
         footerLogoUrl: null,
+        ...defaultFooterStyle,
         applyToExisting: false,
       }),
     ).rejects.toMatchObject({
@@ -901,6 +918,7 @@ describe('LinkPageService', () => {
       footerText: null,
       footerUrl: null,
       footerLogoUrl: null,
+      ...defaultFooterStyle,
     });
     await service.createLink(auth, 'page-id', {
       placement: LinkPageLinkPlacement.VERTICAL,

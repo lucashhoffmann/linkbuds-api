@@ -14,6 +14,7 @@ import {
 import { LinkPageBackgroundType } from '../enums/link-page-background-type.enum';
 import {
   LinkPageFooterMode,
+  LinkPageFooterSize,
   LinkPageFooterStyle,
 } from '../enums/link-page-footer-mode.enum';
 import { LinkPageLayout } from '../enums/link-page-layout.enum';
@@ -148,6 +149,22 @@ export class LinkPageEntity {
     nullable: true,
   })
   footerBorderColor!: string | null;
+
+  @Column({
+    name: 'footer_font_size',
+    type: 'varchar',
+    length: 10,
+    default: 'SMALL',
+  })
+  footerFontSize!: LinkPageFooterSize;
+
+  @Column({
+    name: 'footer_logo_size',
+    type: 'varchar',
+    length: 10,
+    default: 'SMALL',
+  })
+  footerLogoSize!: LinkPageFooterSize;
 
   @Column({ name: 'background_image_url', type: 'text', nullable: true })
   backgroundImageUrl!: string | null;

@@ -100,6 +100,8 @@ export function toLinkPageDetail(page: LinkPageEntity) {
     footerStyle: page.footerStyle,
     footerBackgroundColor: page.footerBackgroundColor,
     footerBorderColor: page.footerBorderColor,
+    footerFontSize: page.footerFontSize,
+    footerLogoSize: page.footerLogoSize,
     avatarUrl: page.avatarUrl,
     footerMode: page.footerMode,
     footerText: page.footerText,

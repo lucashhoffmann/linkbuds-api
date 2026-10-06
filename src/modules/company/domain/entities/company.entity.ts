@@ -1,6 +1,7 @@
 import { LinkPageEntity } from 'src/modules/link-page/domain/entities/link-page.entity';
 import {
   LinkPageFooterMode,
+  LinkPageFooterSize,
   LinkPageFooterStyle,
 } from 'src/modules/link-page/domain/enums/link-page-footer-mode.enum';
 import { CompanyConditionEntity } from 'src/modules/plan/domain/entities/company-condition.entity';
@@ -80,6 +81,28 @@ export class CompanyEntity {
     nullable: true,
   })
   footerBorderColor!: string | null;
+
+  @Column({ name: 'footer_color', type: 'varchar', length: 7, nullable: true })
+  footerColor!: string | null;
+
+  @Column({ name: 'footer_bold', type: 'boolean', default: false })
+  footerBold!: boolean;
+
+  @Column({
+    name: 'footer_font_size',
+    type: 'varchar',
+    length: 10,
+    default: 'SMALL',
+  })
+  footerFontSize!: LinkPageFooterSize;
+
+  @Column({
+    name: 'footer_logo_size',
+    type: 'varchar',
+    length: 10,
+    default: 'SMALL',
+  })
+  footerLogoSize!: LinkPageFooterSize;
 
   @OneToMany(() => CompanyConditionEntity, (condition) => condition.company)
   conditions!: CompanyConditionEntity[];

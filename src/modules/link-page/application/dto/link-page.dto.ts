@@ -5,6 +5,7 @@ import { LinkPageBackgroundType } from '../../domain/enums/link-page-background-
 import { LinkPageContactType } from '../../domain/enums/link-page-contact-type.enum';
 import {
   LinkPageFooterMode,
+  LinkPageFooterSize,
   LinkPageFooterStyle,
 } from '../../domain/enums/link-page-footer-mode.enum';
 import { LinkPageLayout } from '../../domain/enums/link-page-layout.enum';
@@ -106,14 +107,9 @@ export const updateLinkPageDto = z
     backgroundImageUrl: nullableUrlSchema,
     titleColor: colorSchema.nullable().optional(),
     subtitleColor: colorSchema.nullable().optional(),
-    footerColor: colorSchema.nullable().optional(),
     backgroundGradientColor: colorSchema.optional(),
     titleBold: z.boolean().optional(),
     subtitleBold: z.boolean().optional(),
-    footerBold: z.boolean().optional(),
-    footerStyle: z.enum(LinkPageFooterStyle).optional(),
-    footerBackgroundColor: colorSchema.nullable().optional(),
-    footerBorderColor: colorSchema.nullable().optional(),
     avatarUrl: nullableUrlSchema,
     title: z.string().trim().min(1).max(140).optional(),
     subtitle: optionalText(500),
@@ -131,13 +127,18 @@ export const updateFooterDto = z.object({
   footerText: optionalText(160),
   footerUrl: nullableUrlSchema,
   footerLogoUrl: nullableUrlSchema,
+  /** Look of the CUSTOM footer; background/border apply to PILL and BOX. */
+  footerStyle: z.enum(LinkPageFooterStyle).default(LinkPageFooterStyle.TEXT),
+  footerBackgroundColor: colorSchema.nullable().default(null),
+  footerBorderColor: colorSchema.nullable().default(null),
+  footerColor: colorSchema.nullable().default(null),
+  footerBold: z.boolean().default(false),
+  footerFontSize: z.enum(LinkPageFooterSize).default(LinkPageFooterSize.SMALL),
+  footerLogoSize: z.enum(LinkPageFooterSize).default(LinkPageFooterSize.SMALL),
 });
 
 /** Company default footer; `applyToExisting` also overwrites every page. */
 export const updateFooterDefaultDto = updateFooterDto.extend({
-  footerStyle: z.enum(LinkPageFooterStyle).default(LinkPageFooterStyle.TEXT),
-  footerBackgroundColor: colorSchema.nullable().default(null),
-  footerBorderColor: colorSchema.nullable().default(null),
   applyToExisting: z.boolean().default(false),
 });
 

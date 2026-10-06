@@ -27,6 +27,7 @@ import { AnalyticsEventType } from '../domain/enums/analytics-event-type.enum';
 import { AnalyticsTargetType } from '../domain/enums/analytics-target-type.enum';
 import {
   LinkPageFooterMode,
+  LinkPageFooterSize,
   LinkPageFooterStyle,
 } from '../domain/enums/link-page-footer-mode.enum';
 import { LinkPageLinkKind } from '../domain/enums/link-page-link-kind.enum';
@@ -63,6 +64,15 @@ import {
 } from './link-page.mapper';
 import { PublicLinkPageCacheService } from './public-link-page-cache.service';
 
+function footerFromDto(dto: UpdateFooterDto) {
+  return {
+    ...dto,
+    footerText: dto.footerText ?? null,
+    footerUrl: dto.footerUrl ?? null,
+    footerLogoUrl: dto.footerLogoUrl ?? null,
+  };
+}
+
 function pickFooter(source: {
   footerMode: LinkPageFooterMode;
   footerText: string | null;
@@ -71,6 +81,10 @@ function pickFooter(source: {
   footerStyle: LinkPageFooterStyle;
   footerBackgroundColor: string | null;
   footerBorderColor: string | null;
+  footerColor: string | null;
+  footerBold: boolean;
+  footerFontSize: LinkPageFooterSize;
+  footerLogoSize: LinkPageFooterSize;
 }) {
   const {
     footerMode,
@@ -80,6 +94,10 @@ function pickFooter(source: {
     footerStyle,
     footerBackgroundColor,
     footerBorderColor,
+    footerColor,
+    footerBold,
+    footerFontSize,
+    footerLogoSize,
   } = source;
   return {
     footerMode,
@@ -89,6 +107,10 @@ function pickFooter(source: {
     footerStyle,
     footerBackgroundColor,
     footerBorderColor,
+    footerColor,
+    footerBold,
+    footerFontSize,
+    footerLogoSize,
   };
 }
 
@@ -131,6 +153,8 @@ type PublicLinkPageResponse = {
   footerStyle: LinkPageEntity['footerStyle'];
   footerBackgroundColor: string | null;
   footerBorderColor: string | null;
+  footerFontSize: LinkPageFooterSize;
+  footerLogoSize: LinkPageFooterSize;
   avatarUrl: string | null;
   title: string;
   subtitle: string | null;
@@ -764,6 +788,8 @@ export class LinkPageService {
       footerStyle: parent.footerStyle,
       footerBackgroundColor: parent.footerBackgroundColor,
       footerBorderColor: parent.footerBorderColor,
+      footerFontSize: parent.footerFontSize,
+      footerLogoSize: parent.footerLogoSize,
       avatarUrl: parent.avatarUrl,
       footerMode: parent.footerMode,
       footerText: parent.footerText,
@@ -795,10 +821,7 @@ export class LinkPageService {
       assertEntitled(company, 'whiteLabel');
     }
 
-    page.footerMode = dto.footerMode;
-    page.footerText = dto.footerText ?? null;
-    page.footerUrl = dto.footerUrl ?? null;
-    page.footerLogoUrl = dto.footerLogoUrl ?? null;
+    Object.assign(page, footerFromDto(dto));
 
     const detail = toLinkPageDetail(await this.linkPageRepository.save(page));
 
@@ -818,19 +841,12 @@ export class LinkPageService {
       assertEntitled(company, 'whiteLabel');
     }
 
-    const footer = {
-      footerMode: dto.footerMode,
-      footerText: dto.footerText ?? null,
-      footerUrl: dto.footerUrl ?? null,
-      footerLogoUrl: dto.footerLogoUrl ?? null,
-      footerStyle: dto.footerStyle,
-      footerBackgroundColor: dto.footerBackgroundColor,
-      footerBorderColor: dto.footerBorderColor,
-    };
+    const { applyToExisting, ...fields } = dto;
+    const footer = footerFromDto(fields);
 
     await this.companyRepository.update(company.id, footer);
 
-    if (dto.applyToExisting) {
+    if (applyToExisting) {
       await this.linkPageRepository.update({ companyId: company.id }, footer);
       // Bio invalidation also clears its posts (prefix).
       const bios = await this.linkPageRepository.find({
@@ -1752,6 +1768,8 @@ export class LinkPageService {
       footerStyle: detail.footerStyle,
       footerBackgroundColor: detail.footerBackgroundColor,
       footerBorderColor: detail.footerBorderColor,
+      footerFontSize: detail.footerFontSize,
+      footerLogoSize: detail.footerLogoSize,
       avatarUrl: detail.avatarUrl,
       title: detail.title,
       subtitle: detail.subtitle,
