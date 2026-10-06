@@ -199,6 +199,10 @@ export const ERRORS = {
     status: HttpStatus.BAD_REQUEST,
     message: 'Configuração de link inválida',
   },
+  LINK_PAGE_PREVIEW_UNAVAILABLE: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Não foi possível carregar a prévia deste link',
+  },
   LINK_PAGE_FEATURE_FORBIDDEN: {
     status: HttpStatus.FORBIDDEN,
     message: 'Feature não disponível no plano atual',

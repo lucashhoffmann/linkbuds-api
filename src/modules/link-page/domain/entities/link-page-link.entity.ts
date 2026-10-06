@@ -51,6 +51,17 @@ export class LinkPageLinkEntity {
   })
   contactValue!: string | null;
 
+  @Column({ name: 'preview_image_url', type: 'text', nullable: true })
+  previewImageUrl!: string | null;
+
+  @Column({
+    name: 'preview_description',
+    type: 'varchar',
+    length: 300,
+    nullable: true,
+  })
+  previewDescription!: string | null;
+
   @Column({ name: 'text_color', type: 'varchar', length: 7, nullable: false })
   textColor!: string;
 

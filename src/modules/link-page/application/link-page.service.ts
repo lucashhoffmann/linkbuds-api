@@ -2,6 +2,7 @@ import { normalizeHostname } from 'src/shared/utils/hostname';
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { IncomingHttpHeaders } from 'node:http';
+import { isIP } from 'node:net';
 import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { CompanyDomainEntity } from 'src/modules/company/domain/entities/company-domain.entity';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
@@ -27,6 +28,7 @@ import { LinkPageLinkKind } from '../domain/enums/link-page-link-kind.enum';
 import { LinkPageLinkPlacement } from '../domain/enums/link-page-link-placement.enum';
 import { LinkPageStatus } from '../domain/enums/link-page-status.enum';
 import { LinkPageType } from '../domain/enums/link-page-type.enum';
+import { isValidLinkConfiguration } from '../domain/link-configuration';
 import {
   AnalyticsEventDto,
   CreateLinkPageDto,
@@ -71,6 +73,8 @@ type AnalyticsGroup = 'links' | 'sources' | 'devices' | 'countries';
 
 type AnalyticsRequestContext = {
   headers?: IncomingHttpHeaders;
+  /** Socket address; used when no proxy header carries the client IP. */
+  ip?: string;
 };
 
 type PublicLinkPageResponse = {
@@ -102,6 +106,10 @@ type PublicLinkPageResponse = {
 };
 
 const basicAnalyticsRangeDays = 7;
+const visitorIpsLimit = 100;
+// ponytail: grouped in memory from the latest N views; SQL window per country if pages get huge.
+const geoVisitsScanLimit = 1000;
+const geoVisitsPerCountry = 20;
 const defaultFullAnalyticsRangeDays = 30;
 const clickEventTypes = [
   AnalyticsEventType.LINK_CLICK,
@@ -131,6 +139,26 @@ function normalizeCountryCode(value?: string) {
   const countryCode = value?.trim().toUpperCase();
 
   return countryCode?.length === 2 ? countryCode : null;
+}
+
+// ponytail: trusts proxy headers as sent; spoofable if the API is reachable without the proxy.
+export function resolveClientIp(context: AnalyticsRequestContext) {
+  const candidates = [
+    getHeaderValue(context.headers, 'cf-connecting-ip'),
+    getHeaderValue(context.headers, 'x-real-ip'),
+    getHeaderValue(context.headers, 'x-forwarded-for')?.split(',')[0],
+    context.ip,
+  ];
+
+  for (const candidate of candidates) {
+    const ip = candidate?.trim().replace(/^::ffff:(?=\d+\.)/, '');
+
+    if (ip && isIP(ip)) {
+      return ip;
+    }
+  }
+
+  return null;
 }
 
 function isBotUserAgent(userAgent = '') {
@@ -295,29 +323,22 @@ export class LinkPageService {
 
   private assertLinkConfiguration(link: {
     kind: LinkPageLinkKind;
+    placement?: LinkPageLinkPlacement;
     url?: string | null;
     contactType?: unknown;
     contactValue?: string | null;
+    previewImageUrl?: string | null;
+    previewDescription?: string | null;
   }) {
-    if (
-      link.kind === LinkPageLinkKind.LINK &&
-      link.url &&
-      !link.contactType &&
-      !link.contactValue
-    ) {
-      return;
+    if (!isValidLinkConfiguration(link)) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION);
     }
 
-    if (
-      link.kind === LinkPageLinkKind.CONTACT &&
-      !link.url &&
-      link.contactType &&
-      link.contactValue
-    ) {
-      return;
+    // Preview fields only mean something on PREVIEW (kind switches leave them behind).
+    if (link.kind !== LinkPageLinkKind.PREVIEW) {
+      link.previewImageUrl = null;
+      link.previewDescription = null;
     }
-
-    throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION);
   }
 
   private parseRange(
@@ -466,6 +487,28 @@ export class LinkPageService {
       .groupBy(columnByGroup[group])
       .orderBy('COUNT(*)', 'DESC')
       .getRawMany<{ label: string; count: string }>();
+  }
+
+  /** Distinct visitor IPs (page views), most recent first. Every tier. */
+  private async getVisitorIps(linkPageId: string, range: AnalyticsRange) {
+    const rows = await this.createAnalyticsBaseQuery(linkPageId, range)
+      .andWhere('event.eventType = :eventType', {
+        eventType: AnalyticsEventType.PAGE_VIEW,
+      })
+      .andWhere('event.ipAddress IS NOT NULL')
+      .select('event.ipAddress', 'ip')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('MAX(event.createdAt)', 'lastSeenAt')
+      .groupBy('event.ipAddress')
+      .orderBy('MAX(event.createdAt)', 'DESC')
+      .limit(visitorIpsLimit)
+      .getRawMany<{ ip: string; count: string; lastSeenAt: Date }>();
+
+    return rows.map((row) => ({
+      ip: row.ip,
+      count: Number(row.count),
+      lastSeenAt: new Date(row.lastSeenAt).toISOString(),
+    }));
   }
 
   async list(auth: AuthPayload) {
@@ -737,6 +780,8 @@ export class LinkPageService {
         url: dto.url ?? null,
         contactType: dto.contactType ?? null,
         contactValue: dto.contactValue ?? null,
+        previewImageUrl: dto.previewImageUrl ?? null,
+        previewDescription: dto.previewDescription ?? null,
       }),
     );
 
@@ -1042,6 +1087,7 @@ export class LinkPageService {
           utmContent: dto.utmContent ?? null,
           utmTerm: dto.utmTerm ?? null,
           countryCode,
+          ipAddress: resolveClientIp(context),
           deviceType: detectDeviceType(userAgent) ?? dto.deviceType ?? null,
           browser: detectBrowser(userAgent) ?? dto.browser ?? null,
           operatingSystem:
@@ -1189,23 +1235,31 @@ export class LinkPageService {
   ) {
     const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
     const range = this.parseAnalyticsRange(tier, from, to);
-    const [summary, topTargets, timeseries, sources, devices, countries] =
-      await Promise.all([
-        this.getAnalyticsSummaryData(linkPageId, range),
-        this.getTopTargets(linkPageId, range, tier === 'BASIC' ? 5 : undefined),
-        tier === 'FULL'
-          ? this.getAnalyticsTimeseriesData(linkPageId, range)
-          : Promise.resolve([]),
-        tier === 'FULL'
-          ? this.getAnalyticsGroupData(linkPageId, 'sources', range)
-          : Promise.resolve([]),
-        tier === 'FULL'
-          ? this.getAnalyticsGroupData(linkPageId, 'devices', range)
-          : Promise.resolve([]),
-        tier === 'FULL'
-          ? this.getAnalyticsGroupData(linkPageId, 'countries', range)
-          : Promise.resolve([]),
-      ]);
+    const [
+      summary,
+      topTargets,
+      timeseries,
+      sources,
+      devices,
+      countries,
+      visitorIps,
+    ] = await Promise.all([
+      this.getAnalyticsSummaryData(linkPageId, range),
+      this.getTopTargets(linkPageId, range, tier === 'BASIC' ? 5 : undefined),
+      tier === 'FULL'
+        ? this.getAnalyticsTimeseriesData(linkPageId, range)
+        : Promise.resolve([]),
+      tier === 'FULL'
+        ? this.getAnalyticsGroupData(linkPageId, 'sources', range)
+        : Promise.resolve([]),
+      tier === 'FULL'
+        ? this.getAnalyticsGroupData(linkPageId, 'devices', range)
+        : Promise.resolve([]),
+      tier === 'FULL'
+        ? this.getAnalyticsGroupData(linkPageId, 'countries', range)
+        : Promise.resolve([]),
+      this.getVisitorIps(linkPageId, range),
+    ]);
 
     return {
       tier,
@@ -1219,10 +1273,93 @@ export class LinkPageService {
       sources,
       devices,
       countries,
+      visitorIps,
       limits: {
         maxRangeDays: tier === 'BASIC' ? basicAnalyticsRangeDays : null,
         advancedDimensionsEnabled: tier === 'FULL',
       },
+    };
+  }
+
+  /**
+   * Page views per country with the latest visits, for the globe (FULL tier).
+   * Realtime = latest view of each session still online.
+   */
+  async analyticsGeo(
+    auth: AuthPayload,
+    linkPageId: string,
+    options: { realtime?: boolean; from?: string; to?: string } = {},
+  ) {
+    const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
+
+    if (tier !== 'FULL') {
+      throw new AppException(ERROR_CODES.LINK_PAGE_FEATURE_FORBIDDEN);
+    }
+
+    const qb = this.analyticsRepository
+      .createQueryBuilder('event')
+      .where('event.linkPageId = :linkPageId', { linkPageId })
+      .andWhere('event.eventType = :eventType', {
+        eventType: AnalyticsEventType.PAGE_VIEW,
+      })
+      .orderBy('event.createdAt', 'DESC')
+      .take(geoVisitsScanLimit);
+
+    if (options.realtime) {
+      const sessions =
+        (await this.presenceService?.onlineSessions(linkPageId)) ?? [];
+
+      if (!sessions.length) {
+        return { realtime: true, total: 0, locations: [] };
+      }
+
+      qb.andWhere('event.sessionId IN (:...sessions)', { sessions });
+    } else {
+      const range = this.parseAnalyticsRange(tier, options.from, options.to);
+      qb.andWhere('event.createdAt BETWEEN :from AND :to', range);
+    }
+
+    const events = await qb.getMany();
+    const seenSessions = new Set<string>();
+    const byCountry = new Map<
+      string,
+      { countryCode: string; count: number; visits: unknown[] }
+    >();
+
+    for (const event of events) {
+      if (options.realtime && event.sessionId) {
+        if (seenSessions.has(event.sessionId)) continue;
+        seenSessions.add(event.sessionId);
+      }
+
+      const countryCode = event.countryCode ?? 'unknown';
+      const location = byCountry.get(countryCode) ?? {
+        countryCode,
+        count: 0,
+        visits: [],
+      };
+      location.count += 1;
+
+      if (location.visits.length < geoVisitsPerCountry) {
+        location.visits.push({
+          createdAt: event.createdAt.toISOString(),
+          ipAddress: event.ipAddress,
+          deviceType: event.deviceType,
+          browser: event.browser,
+          operatingSystem: event.operatingSystem,
+          source: event.utmSource ?? event.referrer,
+        });
+      }
+
+      byCountry.set(countryCode, location);
+    }
+
+    const locations = [...byCountry.values()].sort((a, b) => b.count - a.count);
+
+    return {
+      realtime: Boolean(options.realtime),
+      total: locations.reduce((sum, location) => sum + location.count, 0),
+      locations,
     };
   }
 

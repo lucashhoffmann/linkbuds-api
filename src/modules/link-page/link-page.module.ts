@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CompanyDomainEntity } from '../company/domain/entities/company-domain.entity';
 import { CompanyEntity } from '../company/domain/entities/company.entity';
 import { LinkPageService } from './application/link-page.service';
+import { LinkPreviewService } from './application/link-preview.service';
 import { LinkPagePresenceService } from './application/link-page-presence.service';
 import { PublicLinkPageCacheService } from './application/public-link-page-cache.service';
 import { LinkPageAnalyticsEventEntity } from './domain/entities/link-page-analytics-event.entity';
@@ -31,6 +32,7 @@ import { PublicLinkPageController } from './presentation/public-link-page.contro
     RedisClient,
     LinkPageService,
     LinkPagePresenceService,
+    LinkPreviewService,
     PublicLinkPageCacheService,
   ],
   exports: [

@@ -22,18 +22,22 @@ async function bootstrap() {
     configService.get<string>('CORS_ORIGIN'),
   );
 
-  app.enableCors({
-    origin: (origin, callback) => {
-      if (isDev || !origin) {
-        callback(null, true);
-        return;
-      }
+  // Public pages are served from any custom domain; those routes read no session.
+  app.enableCors(
+    (req: { url?: string; headers: { origin?: string } }, callback) => {
+      const origin = req.headers.origin;
 
-      callback(null, allowedOrigins.includes(origin));
+      callback(null, {
+        origin:
+          isDev ||
+          !origin ||
+          Boolean(req.url?.startsWith('/public/')) ||
+          allowedOrigins.includes(origin),
+        methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+        credentials: true,
+      });
     },
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true,
-  });
+  );
 
   await app.listen(process.env.PORT ?? 3030);
 }

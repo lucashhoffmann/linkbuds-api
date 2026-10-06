@@ -9,7 +9,10 @@ import { LinkPageLinkPlacement } from '../domain/enums/link-page-link-placement.
 import { LinkPageLayout } from '../domain/enums/link-page-layout.enum';
 import { LinkPageStatus } from '../domain/enums/link-page-status.enum';
 import { LinkPageType } from '../domain/enums/link-page-type.enum';
-import { LinkPageService } from '../application/link-page.service';
+import {
+  LinkPageService,
+  resolveClientIp,
+} from '../application/link-page.service';
 
 function createRepositoryMock() {
   return {
@@ -29,6 +32,7 @@ function createQueryBuilderMock(rawRows: unknown[] = []) {
     andWhere: jest.fn(),
     getRawMany: jest.fn().mockResolvedValue(rawRows),
     groupBy: jest.fn(),
+    limit: jest.fn(),
     orderBy: jest.fn(),
     select: jest.fn(),
     where: jest.fn(),
@@ -45,7 +49,11 @@ function createQueryBuilderMock(rawRows: unknown[] = []) {
 
 function createService(options?: {
   analyticsRepository?: ReturnType<typeof createRepositoryMock>;
-  presenceService?: { countOnline?: jest.Mock; heartbeat?: jest.Mock };
+  presenceService?: {
+    countOnline?: jest.Mock;
+    heartbeat?: jest.Mock;
+    onlineSessions?: jest.Mock;
+  };
   publicCache?: {
     get?: jest.Mock;
     invalidateSlug?: jest.Mock;
@@ -315,7 +323,7 @@ describe('LinkPageService', () => {
     expect(companyRepository.update).not.toHaveBeenCalled();
   });
 
-  it('records public analytics events without an IP field', async () => {
+  it('records the visitor IP on public analytics events', async () => {
     const analyticsRepository = createRepositoryMock();
     const linkPageRepository = createRepositoryMock();
     linkPageRepository.findOne.mockResolvedValue({
@@ -333,29 +341,36 @@ describe('LinkPageService', () => {
       analyticsRepository as never,
     );
 
-    await service.recordPublicEvent('page-id', {
-      eventId: null,
-      eventType: AnalyticsEventType.PAGE_VIEW,
-      targetType: null,
-      targetId: null,
-      visitorId: 'visitor-id',
-      sessionId: 'session-id',
-      referrer: null,
-      utmSource: null,
-      utmMedium: null,
-      utmCampaign: null,
-      utmContent: null,
-      utmTerm: null,
-      countryCode: null,
-      deviceType: null,
-      browser: null,
-      operatingSystem: null,
-      durationMs: null,
-      metadata: null,
-    });
+    await service.recordPublicEvent(
+      'page-id',
+      {
+        eventId: null,
+        eventType: AnalyticsEventType.PAGE_VIEW,
+        targetType: null,
+        targetId: null,
+        visitorId: 'visitor-id',
+        sessionId: 'session-id',
+        referrer: null,
+        utmSource: null,
+        utmMedium: null,
+        utmCampaign: null,
+        utmContent: null,
+        utmTerm: null,
+        countryCode: null,
+        deviceType: null,
+        browser: null,
+        operatingSystem: null,
+        durationMs: null,
+        metadata: null,
+      },
+      {
+        headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' },
+        ip: '::ffff:10.0.0.1',
+      },
+    );
 
     expect(analyticsRepository.create).toHaveBeenCalledWith(
-      expect.not.objectContaining({ ip: expect.anything() }),
+      expect.objectContaining({ ipAddress: '203.0.113.7' }),
     );
     expect(analyticsRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -363,6 +378,20 @@ describe('LinkPageService', () => {
         visitorId: 'visitor-id',
       }),
     );
+  });
+
+  it('resolves the client IP from proxy headers, then the socket', () => {
+    expect(
+      resolveClientIp({ headers: { 'cf-connecting-ip': '198.51.100.1' } }),
+    ).toBe('198.51.100.1');
+    expect(
+      resolveClientIp({
+        headers: { 'x-forwarded-for': 'junk' },
+        ip: '::ffff:192.0.2.5',
+      }),
+    ).toBe('192.0.2.5');
+    expect(resolveClientIp({ ip: '2001:db8::1' })).toBe('2001:db8::1');
+    expect(resolveClientIp({})).toBeNull();
   });
 
   it('returns basic insights for free plans with a fixed 7-day window', async () => {
@@ -385,6 +414,15 @@ describe('LinkPageService', () => {
       clickThroughRate: 0.4,
       averageDurationMs: 1000,
     } as never);
+    jest.spyOn(service as never, 'createAnalyticsBaseQuery').mockReturnValue(
+      createQueryBuilderMock([
+        {
+          ip: '203.0.113.7',
+          count: '3',
+          lastSeenAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+      ]) as never,
+    );
     const topTargets = jest
       .spyOn(service as never, 'getTopTargets')
       .mockResolvedValue([
@@ -406,6 +444,9 @@ describe('LinkPageService', () => {
     expect(result.timeseries).toEqual([]);
     expect(result.sources).toEqual([]);
     expect(topTargets).toHaveBeenCalledWith('page-id', expect.any(Object), 5);
+    expect(result.visitorIps).toEqual([
+      { ip: '203.0.113.7', count: 3, lastSeenAt: '2026-01-01T00:00:00.000Z' },
+    ]);
   });
 
   it('returns full insights for plans with the FULL analytics tier', async () => {
@@ -440,6 +481,10 @@ describe('LinkPageService', () => {
       .spyOn(service as never, 'getAnalyticsGroupData')
       .mockResolvedValue([{ label: 'mobile', count: '10' }] as never);
 
+    jest
+      .spyOn(service as never, 'getVisitorIps')
+      .mockResolvedValue([] as never);
+
     const result = await service.analyticsInsights(
       auth,
       'page-id',
@@ -456,6 +501,83 @@ describe('LinkPageService', () => {
     expect(result.sources).toHaveLength(1);
     expect(result.devices).toHaveLength(1);
     expect(result.countries).toHaveLength(1);
+  });
+
+  it('blocks the globe on the free analytics tier', async () => {
+    const { companyRepository, linkPageRepository, service } = createService();
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { analyticsTier: 'BASIC' },
+    });
+    linkPageRepository.findOne.mockResolvedValue({
+      id: 'page-id',
+      companyId: auth.companyId,
+    });
+
+    await expect(service.analyticsGeo(auth, 'page-id')).rejects.toMatchObject({
+      errorCode: ERROR_CODES.LINK_PAGE_FEATURE_FORBIDDEN,
+    });
+  });
+
+  it('groups realtime globe visits by country, one per online session', async () => {
+    const analyticsRepository = createRepositoryMock();
+    const qb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([
+        {
+          sessionId: 's1',
+          countryCode: 'BR',
+          ipAddress: '198.51.100.1',
+          createdAt: new Date('2026-01-01T10:02:00Z'),
+        },
+        {
+          sessionId: 's1',
+          countryCode: 'BR',
+          ipAddress: '198.51.100.1',
+          createdAt: new Date('2026-01-01T10:01:00Z'),
+        },
+        {
+          sessionId: 's2',
+          countryCode: null,
+          ipAddress: null,
+          createdAt: new Date('2026-01-01T10:00:00Z'),
+        },
+      ]),
+    };
+    Object.assign(analyticsRepository, {
+      createQueryBuilder: jest.fn(() => qb),
+    });
+    const { companyRepository, linkPageRepository, service } = createService({
+      analyticsRepository,
+      presenceService: {
+        onlineSessions: jest.fn().mockResolvedValue(['s1', 's2']),
+      },
+    });
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { analyticsTier: 'FULL' },
+    });
+    linkPageRepository.findOne.mockResolvedValue({
+      id: 'page-id',
+      companyId: auth.companyId,
+    });
+
+    const result = await service.analyticsGeo(auth, 'page-id', {
+      realtime: true,
+    });
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'event.sessionId IN (:...sessions)',
+      { sessions: ['s1', 's2'] },
+    );
+    expect(result.total).toBe(2);
+    expect(result.locations).toEqual([
+      expect.objectContaining({ countryCode: 'BR', count: 1 }),
+      expect.objectContaining({ countryCode: 'unknown', count: 1 }),
+    ]);
   });
 
   it('deduplicates repeated public events by eventId', async () => {
@@ -774,6 +896,7 @@ describe('LinkPageService', () => {
       url: 'https://example.com',
       contactType: null,
       contactValue: null,
+      previewDescription: null,
       textColor: '#111827',
       backgroundColor: '#FFFFFF',
       borderColor: '#E5E7EB',

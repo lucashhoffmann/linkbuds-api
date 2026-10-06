@@ -55,4 +55,13 @@ export class LinkPagePresenceService {
 
     return this.redis.zcard(key);
   }
+
+  /** Session ids still online, for the realtime globe. */
+  async onlineSessions(linkPageId: string) {
+    if (!(await this.ensureConnected())) {
+      return [];
+    }
+
+    return this.redis.zrangebyscore(this.key(linkPageId), Date.now(), '+inf');
+  }
 }

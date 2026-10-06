@@ -63,6 +63,9 @@ export class LinkPageAnalyticsEventEntity {
   @Column({ name: 'utm_term', type: 'varchar', length: 120, nullable: true })
   utmTerm!: string | null;
 
+  @Column({ name: 'ip_address', type: 'varchar', length: 45, nullable: true })
+  ipAddress!: string | null;
+
   @Column({ name: 'country_code', type: 'varchar', length: 2, nullable: true })
   countryCode!: string | null;
 

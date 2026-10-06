@@ -9,6 +9,7 @@ import { LinkPageLinkKind } from '../../domain/enums/link-page-link-kind.enum';
 import { LinkPageLinkPlacement } from '../../domain/enums/link-page-link-placement.enum';
 import { LinkPageStatus } from '../../domain/enums/link-page-status.enum';
 import { SocialPlatform } from '../../domain/enums/social-platform.enum';
+import { isValidLinkConfiguration } from '../../domain/link-configuration';
 
 const slugSchema = z
   .string()
@@ -148,6 +149,8 @@ const linkPageLinkBaseDto = z.object({
   url: nullableUrlSchema,
   contactType: z.enum(LinkPageContactType).nullable().optional(),
   contactValue: optionalText(180),
+  previewImageUrl: httpUrlSchema.nullable().optional(),
+  previewDescription: optionalText(300),
   textColor: colorSchema.default('#111827'),
   backgroundColor: colorSchema.default('#FFFFFF'),
   borderColor: colorSchema.default('#E5E7EB'),
@@ -157,15 +160,7 @@ const linkPageLinkBaseDto = z.object({
 });
 
 export const linkPageLinkDto = linkPageLinkBaseDto.refine(
-  (data) =>
-    (data.kind === LinkPageLinkKind.LINK &&
-      Boolean(data.url) &&
-      !data.contactType &&
-      !data.contactValue) ||
-    (data.kind === LinkPageLinkKind.CONTACT &&
-      !data.url &&
-      Boolean(data.contactType) &&
-      Boolean(data.contactValue)),
+  isValidLinkConfiguration,
 );
 
 export const updateLinkPageLinkDto = partialUpdateDto(linkPageLinkBaseDto);
@@ -238,3 +233,7 @@ export type UpdateLinkPageImageDto = z.infer<typeof updateLinkPageImageDto>;
 export type ReorderItemsDto = z.infer<typeof reorderItemsDto>;
 export type AnalyticsEventDto = z.infer<typeof analyticsEventDto>;
 export type AnalyticsPresenceDto = z.infer<typeof analyticsPresenceDto>;
+
+export const linkPreviewQueryDto = z.object({ url: httpUrlSchema });
+
+export type LinkPreviewQueryDto = z.infer<typeof linkPreviewQueryDto>;

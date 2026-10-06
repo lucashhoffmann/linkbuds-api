@@ -4,6 +4,7 @@ import {
   Get,
   Header,
   Headers,
+  Ip,
   Param,
   ParseUUIDPipe,
   Post,
@@ -87,8 +88,9 @@ export class PublicLinkPageController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodValidationPipe(analyticsEventDto)) dto: AnalyticsEventDto,
     @Headers() headers: IncomingHttpHeaders,
+    @Ip() ip: string,
   ) {
-    return this.linkPageService.recordPublicEvent(id, dto, { headers });
+    return this.linkPageService.recordPublicEvent(id, dto, { headers, ip });
   }
 
   @Post(':id/presence')

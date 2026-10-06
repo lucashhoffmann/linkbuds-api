@@ -35,6 +35,8 @@ export function toLinkPageLinkResponse(link: LinkPageLinkEntity) {
     url: link.url,
     contactType: link.contactType,
     contactValue: link.contactValue,
+    previewImageUrl: link.previewImageUrl,
+    previewDescription: link.previewDescription,
     textColor: link.textColor,
     backgroundColor: link.backgroundColor,
     borderColor: link.borderColor,

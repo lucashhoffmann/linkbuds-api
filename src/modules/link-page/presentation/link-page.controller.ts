@@ -12,6 +12,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { GetAuth } from 'src/shared/decorators/get-auth.decorator';
 import { AuthGuard } from 'src/shared/guards/auth.guard';
 import { TransformResponseInterceptor } from 'src/shared/interceptors';
@@ -23,6 +24,7 @@ import {
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
+  linkPreviewQueryDto,
   reorderItemsDto,
   updateFooterDefaultDto,
   updateFooterDto,
@@ -35,6 +37,7 @@ import {
   type LinkPageImageDto,
   type LinkPageLinkDto,
   type LinkPageSocialLinkDto,
+  type LinkPreviewQueryDto,
   type ReorderItemsDto,
   type UpdateFooterDefaultDto,
   type UpdateFooterDto,
@@ -44,12 +47,16 @@ import {
   type UpdateLinkPageSocialLinkDto,
 } from '../application/dto/link-page.dto';
 import { LinkPageService } from '../application/link-page.service';
+import { LinkPreviewService } from '../application/link-preview.service';
 
 @Controller('link-pages')
 @UseInterceptors(TransformResponseInterceptor)
 @UseGuards(AuthGuard)
 export class LinkPageController {
-  constructor(private readonly linkPageService: LinkPageService) {}
+  constructor(
+    private readonly linkPageService: LinkPageService,
+    private readonly linkPreviewService: LinkPreviewService,
+  ) {}
 
   @Get()
   list(@GetAuth() auth: AuthPayload) {
@@ -79,6 +86,16 @@ export class LinkPageController {
     dto: UpdateFooterDefaultDto,
   ) {
     return this.linkPageService.updateFooterDefault(auth, dto);
+  }
+
+  /** OG data for a "Link com prévia" card. Declared before `:id`. */
+  @Get('link-preview')
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  linkPreview(
+    @Query(new ZodValidationPipe(linkPreviewQueryDto))
+    query: LinkPreviewQueryDto,
+  ) {
+    return this.linkPreviewService.fetch(query.url);
   }
 
   @Get(':id')
@@ -255,6 +272,21 @@ export class LinkPageController {
     @Query('to') to?: string,
   ) {
     return this.linkPageService.analyticsInsights(auth, id, from, to);
+  }
+
+  @Get(':id/analytics/geo')
+  analyticsGeo(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query('realtime') realtime?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.linkPageService.analyticsGeo(auth, id, {
+      realtime: realtime === 'true',
+      from,
+      to,
+    });
   }
 
   @Get(':id/analytics/link-clicks')

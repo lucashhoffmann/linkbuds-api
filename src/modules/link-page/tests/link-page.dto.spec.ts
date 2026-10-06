@@ -40,6 +40,32 @@ describe('LinkPage DTOs', () => {
     expect(imageResult?.success).toBe(false);
   });
 
+  it('accepts PREVIEW only as a vertical link with an URL', () => {
+    const preview = {
+      placement: 'VERTICAL',
+      kind: 'PREVIEW',
+      label: 'Loja',
+      url: 'https://example.com',
+      previewImageUrl: 'https://example.com/og.png',
+      previewDescription: 'Promoção',
+    };
+
+    expect(linkPageLinkDto.safeParse(preview).success).toBe(true);
+    expect(
+      linkPageLinkDto.safeParse({ ...preview, placement: 'HORIZONTAL' })
+        .success,
+    ).toBe(false);
+    expect(linkPageLinkDto.safeParse({ ...preview, url: null }).success).toBe(
+      false,
+    );
+    expect(
+      linkPageLinkDto.safeParse({
+        ...preview,
+        previewImageUrl: 'javascript:alert(1)',
+      }).success,
+    ).toBe(false);
+  });
+
   it('keeps PATCH payloads partial without re-applying create defaults', () => {
     expect(updateLinkPageLinkDto.parse({ label: 'Novo' })).toEqual({
       label: 'Novo',
