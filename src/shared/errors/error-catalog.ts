@@ -169,7 +169,16 @@ export const ERRORS = {
   // --- Páginas
   LINK_PAGE_INVALID_PARENT: {
     status: HttpStatus.BAD_REQUEST,
-    message: 'Posts só podem ser criados dentro de uma página de bio',
+    message:
+      'Posts e formulários só podem ser criados dentro de uma página de bio',
+  },
+  LINK_PAGE_FORM_WEBHOOK_MISSING: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'Configure a planilha do Google neste formulário primeiro',
+  },
+  LINK_PAGE_FORM_INVALID_ANSWERS: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'Confira os campos destacados',
   },
   LINK_PAGE_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,

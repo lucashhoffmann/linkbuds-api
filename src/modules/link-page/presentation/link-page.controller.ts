@@ -19,6 +19,7 @@ import { TransformResponseInterceptor } from 'src/shared/interceptors';
 import { ZodValidationPipe } from 'src/shared/pipes/zod-validation.pipe';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import {
+  createFormPageDto,
   createLinkPageDto,
   createPostPageDto,
   linkPageImageDto,
@@ -35,6 +36,7 @@ import {
   updateLinkPageLinkDto,
   updateLinkPageSocialLinkDto,
   updateLinkPageVideoDto,
+  type CreateFormPageDto,
   type CreateLinkPageDto,
   type CreatePostPageDto,
   type LinkPageImageDto,
@@ -136,6 +138,41 @@ export class LinkPageController {
     @Body(new ZodValidationPipe(createPostPageDto)) dto: CreatePostPageDto,
   ) {
     return this.linkPageService.createPost(auth, id, dto);
+  }
+
+  @Post(':id/forms')
+  createForm(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(createFormPageDto)) dto: CreateFormPageDto,
+  ) {
+    return this.linkPageService.createForm(auth, id, dto);
+  }
+
+  @Get(':id/submissions')
+  listSubmissions(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.linkPageService.listSubmissions(auth, id);
+  }
+
+  /** Pushes answers not yet in the Google Sheet. */
+  @Post(':id/submissions/resend')
+  resendSubmissions(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.linkPageService.resendSubmissions(auth, id);
+  }
+
+  @Delete(':id/submissions/:submissionId')
+  deleteSubmission(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('submissionId', new ParseUUIDPipe()) submissionId: string,
+  ) {
+    return this.linkPageService.deleteSubmission(auth, id, submissionId);
   }
 
   @Delete(':id')

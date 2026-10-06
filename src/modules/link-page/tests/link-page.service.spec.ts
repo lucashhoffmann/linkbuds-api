@@ -101,6 +101,7 @@ function createService(options?: {
     imageRepository as never,
     videoRepository as never,
     analyticsRepository as never,
+    createRepositoryMock() as never,
     options?.presenceService as never,
     publicCache as never,
   );
@@ -367,6 +368,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       analyticsRepository as never,
+      createRepositoryMock() as never,
     );
 
     await service.recordPublicEvent(
@@ -627,6 +629,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       analyticsRepository as never,
+      createRepositoryMock() as never,
     );
 
     await expect(
@@ -676,6 +679,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       analyticsRepository as never,
+      createRepositoryMock() as never,
     );
 
     await expect(

@@ -1,5 +1,5 @@
 import { normalizeHostname } from 'src/shared/utils/hostname';
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { IncomingHttpHeaders } from 'node:http';
 import { isIP } from 'node:net';
@@ -19,6 +19,12 @@ import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { LinkPageAnalyticsEventEntity } from '../domain/entities/link-page-analytics-event.entity';
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
 import { LinkPageVideoEntity } from '../domain/entities/link-page-video.entity';
+import { LinkPageFormSubmissionEntity } from '../domain/entities/link-page-form-submission.entity';
+import {
+  defaultFormConfig,
+  toSheetRow,
+  validateFormAnswers,
+} from '../domain/form-fields';
 import { LinkPageMediaSize } from '../domain/enums/link-page-media-size.enum';
 import { LinkPageLinkEntity } from '../domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from '../domain/entities/link-page-social-link.entity';
@@ -38,6 +44,7 @@ import { isValidLinkConfiguration } from '../domain/link-configuration';
 import {
   AnalyticsEventDto,
   CreateLinkPageDto,
+  CreateFormPageDto,
   CreatePostPageDto,
   LinkPageImageDto,
   LinkPageVideoDto,
@@ -45,6 +52,7 @@ import {
   LinkPageSocialLinkDto,
   ReorderContentDto,
   ReorderItemsDto,
+  SubmitFormDto,
   UpdateFooterDefaultDto,
   UpdateFooterDto,
   UpdateLinkPageDto,
@@ -55,6 +63,7 @@ import {
 } from './dto/link-page.dto';
 import { LinkPagePresenceService } from './link-page-presence.service';
 import {
+  toFormSubmissionResponse,
   toImageResponse,
   toVideoResponse,
   toLinkPageDetail,
@@ -129,8 +138,10 @@ type AnalyticsRequestContext = {
 
 type PublicLinkPageResponse = {
   id: string;
-  /** Bio slug when this is a post sub-page. */
+  /** Bio slug when this is a post or form sub-page. */
   parentSlug: string | null;
+  /** FORM pages only. */
+  form: LinkPageEntity['form'];
   postNetwork: LinkPageEntity['postNetwork'];
   postUrl: string | null;
   /** Always the bio's: posts inherit tracking. */
@@ -169,6 +180,9 @@ type PublicLinkPageResponse = {
 };
 
 const basicAnalyticsRangeDays = 7;
+// ponytail: newest N only, no paging; add offset/cursor when a form outgrows it.
+const formSubmissionsLimit = 500;
+const webhookTimeoutMs = 10_000;
 const visitorIpsLimit = 100;
 // ponytail: grouped in memory from the latest N views; SQL window per country if pages get huge.
 const geoVisitsScanLimit = 1000;
@@ -274,6 +288,7 @@ function escapeXml(value: string) {
 
 @Injectable()
 export class LinkPageService {
+  private readonly logger = new Logger(LinkPageService.name);
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(CompanyEntity)
@@ -292,6 +307,8 @@ export class LinkPageService {
     private readonly videoRepository: Repository<LinkPageVideoEntity>,
     @InjectRepository(LinkPageAnalyticsEventEntity)
     private readonly analyticsRepository: Repository<LinkPageAnalyticsEventEntity>,
+    @InjectRepository(LinkPageFormSubmissionEntity)
+    private readonly submissionRepository: Repository<LinkPageFormSubmissionEntity>,
     @Optional()
     private readonly presenceService?: LinkPagePresenceService,
     @Optional()
@@ -697,6 +714,8 @@ export class LinkPageService {
     const {
       postNetwork,
       postUrl,
+      form,
+      formWebhookUrl,
       gtmContainerId,
       ga4MeasurementId,
       ...pageFields
@@ -704,9 +723,11 @@ export class LinkPageService {
     Object.assign(
       page,
       pageFields,
-      page.type === LinkPageType.POST
-        ? { postNetwork, postUrl }
-        : { gtmContainerId, ga4MeasurementId },
+      page.type === LinkPageType.POST && { postNetwork, postUrl },
+      page.type === LinkPageType.FORM && form && { form },
+      page.type === LinkPageType.FORM &&
+        formWebhookUrl !== undefined && { formWebhookUrl },
+      !page.parentPageId && { gtmContainerId, ga4MeasurementId },
     );
 
     try {
@@ -743,14 +764,40 @@ export class LinkPageService {
   }
 
   /** Post sub-page (/p/:bio/:post), styled like its bio at creation time. */
-  async createPost(
+  createPost(auth: AuthPayload, parentId: string, dto: CreatePostPageDto) {
+    return this.createSubPage(auth, parentId, {
+      type: LinkPageType.POST,
+      name: dto.name,
+      slug: dto.slug,
+      title: dto.title,
+      postNetwork: dto.postNetwork ?? null,
+      postUrl: dto.postUrl ?? null,
+    });
+  }
+
+  /** Form sub-page (/p/:bio/:form): same as a post, plus the default fields. */
+  createForm(auth: AuthPayload, parentId: string, dto: CreateFormPageDto) {
+    return this.createSubPage(auth, parentId, {
+      type: LinkPageType.FORM,
+      name: dto.name,
+      slug: dto.slug,
+      title: dto.title,
+      form: defaultFormConfig(),
+    });
+  }
+
+  private async createSubPage(
     auth: AuthPayload,
     parentId: string,
-    dto: CreatePostPageDto,
+    dto: Pick<LinkPageEntity, 'name' | 'slug'> &
+      Partial<Pick<LinkPageEntity, 'postNetwork' | 'postUrl' | 'form'>> & {
+        type: LinkPageType.POST | LinkPageType.FORM;
+        title?: string;
+      },
   ) {
     const parent = await this.getPageForCompany(auth.companyId, parentId);
 
-    if (parent.type === LinkPageType.POST) {
+    if (parent.parentPageId) {
       throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_PARENT);
     }
 
@@ -766,7 +813,7 @@ export class LinkPageService {
       companyId: auth.companyId,
       parentPageId: parent.id,
       parentPage: parent,
-      type: LinkPageType.POST,
+      type: dto.type,
       status: LinkPageStatus.ACTIVE,
       name: dto.name,
       slug: dto.slug,
@@ -774,6 +821,7 @@ export class LinkPageService {
       subtitle: null,
       postNetwork: dto.postNetwork ?? null,
       postUrl: dto.postUrl ?? null,
+      form: dto.form ?? null,
       layout: parent.layout,
       backgroundType: parent.backgroundType,
       backgroundColor: parent.backgroundColor,
@@ -1316,6 +1364,171 @@ export class LinkPageService {
     }
   }
 
+  /** Public form submission; the visitor data mirrors an analytics event's. */
+  async submitForm(
+    linkPageId: string,
+    dto: SubmitFormDto,
+    context: AnalyticsRequestContext = {},
+  ) {
+    const page = await this.linkPageRepository.findOne({
+      where: {
+        id: linkPageId,
+        type: LinkPageType.FORM,
+        status: LinkPageStatus.ACTIVE,
+      },
+      relations: { parentPage: true },
+    });
+
+    if (
+      !page?.form ||
+      !page.parentPage ||
+      page.parentPage.deletedAt ||
+      page.parentPage.status !== LinkPageStatus.ACTIVE
+    ) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+    }
+
+    const userAgent = getHeaderValue(context.headers, 'user-agent') ?? '';
+
+    // Honeypot filled or a crawler: pretend it worked, store nothing.
+    if (dto.website || isBotUserAgent(userAgent)) {
+      return { id: null };
+    }
+
+    const result = validateFormAnswers(page.form.fields, dto.answers);
+
+    if (!result.ok) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_FORM_INVALID_ANSWERS, {
+        details: result.invalid.map((path) => ({
+          path,
+          message: 'Valor inválido',
+        })),
+      });
+    }
+
+    const submission = await this.submissionRepository.save(
+      this.submissionRepository.create({
+        linkPageId,
+        answers: result.answers,
+        visitorId: dto.visitorId ?? null,
+        ipAddress: resolveClientIp(context),
+        countryCode:
+          normalizeCountryCode(
+            getHeaderValue(context.headers, 'cf-ipcountry'),
+          ) ??
+          normalizeCountryCode(
+            getHeaderValue(context.headers, 'x-vercel-ip-country'),
+          ),
+        deviceType: detectDeviceType(userAgent),
+        browser: detectBrowser(userAgent),
+        operatingSystem: detectOperatingSystem(userAgent),
+        userAgent: userAgent.slice(0, 1000) || null,
+      }),
+    );
+
+    // Answer is already stored; the sheet is best effort (resend covers failures).
+    void this.deliverToSheet(page, submission);
+
+    return { id: submission.id };
+  }
+
+  /** POSTs one answer to the form's Apps Script; marks it delivered on `{ok:true}`. */
+  private async deliverToSheet(
+    page: Pick<LinkPageEntity, 'id' | 'name' | 'formWebhookUrl'>,
+    submission: LinkPageFormSubmissionEntity,
+  ) {
+    if (!page.formWebhookUrl) return false;
+
+    try {
+      // Apps Script answers 302 → script.googleusercontent.com; fetch follows it.
+      const response = await fetch(page.formWebhookUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(
+          toSheetRow({ id: page.id, name: page.name }, submission),
+        ),
+        signal: AbortSignal.timeout(webhookTimeoutMs),
+      });
+      // A broken script still answers 200 with an HTML error page.
+      const body = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+      } | null;
+
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(`status ${response.status}`);
+      }
+
+      await this.submissionRepository.update(submission.id, {
+        webhookDeliveredAt: new Date(),
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `Google Sheets webhook failed for form ${page.id}: ${String(error)}`,
+      );
+      return false;
+    }
+  }
+
+  /** Sends answers not yet in the sheet (failures + answers before it was set). */
+  async resendSubmissions(auth: AuthPayload, linkPageId: string) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+
+    if (page.type !== LinkPageType.FORM || !page.formWebhookUrl) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_FORM_WEBHOOK_MISSING);
+    }
+
+    // Oldest first so the sheet keeps chronological order.
+    const pending = await this.submissionRepository.find({
+      where: { linkPageId, webhookDeliveredAt: IsNull() },
+      order: { createdAt: 'ASC' },
+      take: formSubmissionsLimit,
+    });
+    let sent = 0;
+
+    // ponytail: sequential, one request per answer; batch payload if forms get big.
+    for (const submission of pending) {
+      if (!(await this.deliverToSheet(page, submission))) break;
+      sent += 1;
+    }
+
+    return { sent, failed: pending.length - sent };
+  }
+
+  async listSubmissions(auth: AuthPayload, linkPageId: string) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+
+    if (page.type !== LinkPageType.FORM) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+    }
+
+    const [items, total] = await this.submissionRepository.findAndCount({
+      where: { linkPageId },
+      order: { createdAt: 'DESC' },
+      take: formSubmissionsLimit,
+    });
+
+    return { items: items.map(toFormSubmissionResponse), total };
+  }
+
+  async deleteSubmission(
+    auth: AuthPayload,
+    linkPageId: string,
+    submissionId: string,
+  ) {
+    await this.getPageForCompany(auth.companyId, linkPageId);
+    const { affected } = await this.submissionRepository.delete({
+      id: submissionId,
+      linkPageId,
+    });
+
+    if (!affected) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+    }
+
+    return { message: 'Resposta removida' };
+  }
+
   async recordPresence(linkPageId: string, sessionId: string) {
     const page = await this.linkPageRepository.findOne({
       where: { id: linkPageId, status: LinkPageStatus.ACTIVE },
@@ -1408,6 +1621,21 @@ export class LinkPageService {
         ])
       : [[], undefined];
     const byPage = new Map(rows.map((row) => [row.linkPageId, row]));
+    const formIds = pages
+      .filter((page) => page.type === LinkPageType.FORM)
+      .map((page) => page.id);
+    const submissionRows = formIds.length
+      ? await this.submissionRepository
+          .createQueryBuilder('submission')
+          .select('submission.linkPageId', 'linkPageId')
+          .addSelect('COUNT(*)', 'count')
+          .where('submission.linkPageId IN (:...formIds)', { formIds })
+          .groupBy('submission.linkPageId')
+          .getRawMany<{ linkPageId: string; count: string }>()
+      : [];
+    const submissionsByPage = new Map(
+      submissionRows.map((row) => [row.linkPageId, Number(row.count)]),
+    );
 
     return {
       tier,
@@ -1426,6 +1654,8 @@ export class LinkPageService {
             pageViews: Number(row?.pageViews ?? 0),
             visitors: Number(row?.visitors ?? 0),
             clicks: Number(row?.clicks ?? 0),
+            /** All-time total (not limited to the analytics window). */
+            submissions: submissionsByPage.get(page.id) ?? 0,
           };
         })
         .sort((a, b) => b.pageViews - a.pageViews || b.clicks - a.clicks),
@@ -1675,7 +1905,7 @@ export class LinkPageService {
     return this.resolvePublic(normalizedHostname, page.slug);
   }
 
-  /** `/p/:slug` (bio) or `/p/:slug/:postSlug` (post sub-page). */
+  /** `/p/:slug` (bio) or `/p/:slug/:postSlug` (post or form sub-page). */
   async resolvePublic(
     hostname: string | undefined,
     slug: string,
@@ -1778,6 +2008,7 @@ export class LinkPageService {
       footerUrl: detail.footerUrl,
       footerLogoUrl: detail.footerLogoUrl,
       parentSlug: postSlug ? slug : null,
+      form: detail.form,
       postNetwork: detail.postNetwork,
       postUrl: detail.postUrl,
       gtmContainerId: bio!.gtmContainerId,

@@ -16,6 +16,10 @@ import { LinkPageStatus } from '../../domain/enums/link-page-status.enum';
 import { SocialPlatform } from '../../domain/enums/social-platform.enum';
 import { isValidLinkConfiguration } from '../../domain/link-configuration';
 import { isSupportedVideoUrl } from '../../domain/video-url';
+import {
+  appsScriptUrlPattern,
+  formConfigSchema,
+} from '../../domain/form-fields';
 
 const slugSchema = z
   .string()
@@ -96,6 +100,27 @@ export const createPostPageDto = z.object({
 
 export type CreatePostPageDto = z.infer<typeof createPostPageDto>;
 
+/** Sub-page of a bio page with a form. Starts with the default fields. */
+export const createFormPageDto = z.object({
+  name: z.string().trim().min(1).max(120),
+  slug: slugSchema,
+  title: z.string().trim().min(1).max(140).optional(),
+});
+
+export type CreateFormPageDto = z.infer<typeof createFormPageDto>;
+
+/** Public submission. `website` is a honeypot: humans never see it. */
+export const submitFormDto = z.object({
+  answers: z.record(
+    z.string().max(40),
+    z.union([z.string().max(5000), z.boolean()]),
+  ),
+  visitorId: optionalText(120),
+  website: z.string().max(200).optional(),
+});
+
+export type SubmitFormDto = z.infer<typeof submitFormDto>;
+
 export const updateLinkPageDto = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
@@ -116,6 +141,18 @@ export const updateLinkPageDto = z
     /** POST pages only. */
     postNetwork: z.enum(SocialPlatform).nullable().optional(),
     postUrl: httpUrlSchema.nullable().optional(),
+    /** FORM pages only. */
+    form: formConfigSchema.optional(),
+    /** FORM pages only. Apps Script web app (`script.google.com/macros/s/…/exec`); empty = off. */
+    formWebhookUrl: z
+      .string()
+      .trim()
+      .transform((value) => (value === '' ? null : value))
+      .refine((value) => value === null || appsScriptUrlPattern.test(value), {
+        message: 'Use a URL do app da Web do Apps Script (termina em /exec)',
+      })
+      .nullable()
+      .optional(),
     /** Bio pages only; posts use their bio's. */
     gtmContainerId: trackingIdSchema(gtmContainerIdPattern),
     ga4MeasurementId: trackingIdSchema(ga4MeasurementIdPattern),

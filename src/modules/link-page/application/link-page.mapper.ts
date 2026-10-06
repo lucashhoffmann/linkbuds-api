@@ -1,3 +1,4 @@
+import { LinkPageFormSubmissionEntity } from '../domain/entities/link-page-form-submission.entity';
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
 import { LinkPageLinkEntity } from '../domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from '../domain/entities/link-page-social-link.entity';
@@ -84,6 +85,23 @@ export function toVideoResponse(video: LinkPageVideoEntity) {
   };
 }
 
+export function toFormSubmissionResponse(
+  submission: LinkPageFormSubmissionEntity,
+) {
+  return {
+    id: submission.id,
+    answers: submission.answers,
+    visitorId: submission.visitorId,
+    ipAddress: submission.ipAddress,
+    countryCode: submission.countryCode,
+    deviceType: submission.deviceType,
+    browser: submission.browser,
+    operatingSystem: submission.operatingSystem,
+    webhookDeliveredAt: submission.webhookDeliveredAt,
+    createdAt: submission.createdAt,
+  };
+}
+
 export function toLinkPageDetail(page: LinkPageEntity) {
   return {
     ...toLinkPageSummary(page),
@@ -109,6 +127,8 @@ export function toLinkPageDetail(page: LinkPageEntity) {
     footerLogoUrl: page.footerLogoUrl,
     gtmContainerId: page.gtmContainerId,
     ga4MeasurementId: page.ga4MeasurementId,
+    form: page.form,
+    formWebhookUrl: page.formWebhookUrl,
     links: (page.links ?? []).map(toLinkPageLinkResponse),
     socialLinks: (page.socialLinks ?? []).map(toSocialLinkResponse),
     images: (page.images ?? []).map(toImageResponse),

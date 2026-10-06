@@ -1,4 +1,5 @@
 import { SocialPlatform } from '../enums/social-platform.enum';
+import type { FormConfig } from '../form-fields';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import {
   Column,
@@ -49,7 +50,7 @@ export class LinkPageEntity {
   @Column({ name: 'type', type: 'varchar', length: 20, nullable: false })
   type!: LinkPageType;
 
-  /** Set only for POST pages. */
+  /** Set only for sub-pages (POST, FORM). */
   @Column({ name: 'parent_page_id', type: 'uuid', nullable: true })
   parentPageId!: string | null;
 
@@ -62,6 +63,14 @@ export class LinkPageEntity {
 
   @Column({ name: 'post_url', type: 'text', nullable: true })
   postUrl!: string | null;
+
+  /** FORM pages only: fields, button text and success message. */
+  @Column({ name: 'form', type: 'jsonb', nullable: true })
+  form!: FormConfig | null;
+
+  /** FORM pages only: Apps Script URL that appends each answer to a Google Sheet. Never public. */
+  @Column({ name: 'form_webhook_url', type: 'text', nullable: true })
+  formWebhookUrl!: string | null;
 
   @Column({ name: 'status', type: 'varchar', length: 20, nullable: false })
   status!: LinkPageStatus;

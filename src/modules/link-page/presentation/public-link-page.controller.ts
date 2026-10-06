@@ -17,8 +17,10 @@ import { ZodValidationPipe } from 'src/shared/pipes/zod-validation.pipe';
 import {
   analyticsEventDto,
   analyticsPresenceDto,
+  submitFormDto,
   type AnalyticsEventDto,
   type AnalyticsPresenceDto,
+  type SubmitFormDto,
 } from '../application/dto/link-page.dto';
 import { LinkPageService } from '../application/link-page.service';
 
@@ -91,6 +93,18 @@ export class PublicLinkPageController {
     @Ip() ip: string,
   ) {
     return this.linkPageService.recordPublicEvent(id, dto, { headers, ip });
+  }
+
+  @Post(':id/submissions')
+  @UseInterceptors(TransformResponseInterceptor)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  submitForm(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(submitFormDto)) dto: SubmitFormDto,
+    @Headers() headers: IncomingHttpHeaders,
+    @Ip() ip: string,
+  ) {
+    return this.linkPageService.submitForm(id, dto, { headers, ip });
   }
 
   @Post(':id/presence')

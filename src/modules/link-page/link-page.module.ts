@@ -8,6 +8,7 @@ import { LinkPreviewService } from './application/link-preview.service';
 import { LinkPagePresenceService } from './application/link-page-presence.service';
 import { PublicLinkPageCacheService } from './application/public-link-page-cache.service';
 import { LinkPageAnalyticsEventEntity } from './domain/entities/link-page-analytics-event.entity';
+import { LinkPageFormSubmissionEntity } from './domain/entities/link-page-form-submission.entity';
 import { LinkPageImageEntity } from './domain/entities/link-page-image.entity';
 import { LinkPageVideoEntity } from './domain/entities/link-page-video.entity';
 import { LinkPageEntity } from './domain/entities/link-page.entity';
@@ -27,6 +28,7 @@ import { PublicLinkPageController } from './presentation/public-link-page.contro
       LinkPageImageEntity,
       LinkPageVideoEntity,
       LinkPageAnalyticsEventEntity,
+      LinkPageFormSubmissionEntity,
     ]),
   ],
   controllers: [LinkPageController, PublicLinkPageController],
