@@ -26,9 +26,14 @@ import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { LinkPageAnalyticsEventEntity } from '../domain/entities/link-page-analytics-event.entity';
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
 import { LinkPageVideoEntity } from '../domain/entities/link-page-video.entity';
+import { LinkPageTextEntity } from '../domain/entities/link-page-text.entity';
 import { LinkPageFormSubmissionEntity } from '../domain/entities/link-page-form-submission.entity';
 import {
   defaultFormConfig,
+  formCohort,
+  scoreFormAnswers,
+  toFormLimit,
+  toPublicForm,
   toSheetRow,
   validateFormAnswers,
 } from '../domain/form-fields';
@@ -53,8 +58,10 @@ import {
   CreateLinkPageDto,
   CreateFormPageDto,
   CreatePostPageDto,
+  FormStateDto,
   LinkPageImageDto,
   LinkPageVideoDto,
+  LinkPageTextDto,
   LinkPageLinkDto,
   LinkPageSocialLinkDto,
   ReorderContentDto,
@@ -65,6 +72,7 @@ import {
   UpdateLinkPageDto,
   UpdateLinkPageImageDto,
   UpdateLinkPageVideoDto,
+  UpdateLinkPageTextDto,
   UpdateLinkPageLinkDto,
   UpdateLinkPageSocialLinkDto,
 } from './dto/link-page.dto';
@@ -73,6 +81,7 @@ import {
   toFormSubmissionResponse,
   toImageResponse,
   toVideoResponse,
+  toTextResponse,
   toLinkPageDetail,
   toLinkPageLinkResponse,
   toLinkPageSummary,
@@ -184,6 +193,7 @@ type PublicLinkPageResponse = {
   socialLinks: ReturnType<typeof toSocialLinkResponse>[];
   images: ReturnType<typeof toImageResponse>[];
   videos: ReturnType<typeof toVideoResponse>[];
+  texts: ReturnType<typeof toTextResponse>[];
 };
 
 const basicAnalyticsRangeDays = 7;
@@ -312,6 +322,8 @@ export class LinkPageService {
     private readonly imageRepository: Repository<LinkPageImageEntity>,
     @InjectRepository(LinkPageVideoEntity)
     private readonly videoRepository: Repository<LinkPageVideoEntity>,
+    @InjectRepository(LinkPageTextEntity)
+    private readonly textRepository: Repository<LinkPageTextEntity>,
     @InjectRepository(LinkPageAnalyticsEventEntity)
     private readonly analyticsRepository: Repository<LinkPageAnalyticsEventEntity>,
     @InjectRepository(LinkPageFormSubmissionEntity)
@@ -410,6 +422,10 @@ export class LinkPageService {
       where: { linkPageId: id },
       order: { sortOrder: 'ASC', createdAt: 'ASC' },
     });
+    page.texts = await this.textRepository.find({
+      where: { linkPageId: id },
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
+    });
 
     return page;
   }
@@ -498,6 +514,7 @@ export class LinkPageService {
       onlineNow,
       formSubmissions,
       formDuration,
+      formScore,
     ] = await Promise.all([
       base
         .clone()
@@ -536,6 +553,14 @@ export class LinkPageService {
         .andWhere('submission.createdAt BETWEEN :from AND :to', range)
         .andWhere('submission.durationMs IS NOT NULL')
         .getRawOne<{ average: string | null }>(),
+      this.submissionRepository
+        .createQueryBuilder('submission')
+        .select('AVG(submission.score)', 'average')
+        .addSelect('AVG(submission.scoreMax)', 'max')
+        .where('submission.linkPageId = :linkPageId', { linkPageId })
+        .andWhere('submission.createdAt BETWEEN :from AND :to', range)
+        .andWhere('submission.score IS NOT NULL')
+        .getRawOne<{ average: string | null; max: string | null }>(),
     ]);
 
     return {
@@ -547,6 +572,14 @@ export class LinkPageService {
       averageDurationMs: Math.round(Number(averageDuration?.average ?? 0)),
       formSubmissions,
       averageFormDurationMs: Math.round(Number(formDuration?.average ?? 0)),
+      /** Questionnaire score in the period; null = no scored answers. */
+      averageFormScore:
+        formScore?.average == null
+          ? null
+          : {
+              score: Math.round(Number(formScore.average) * 10) / 10,
+              max: Math.round(Number(formScore.max) * 10) / 10,
+            },
     };
   }
 
@@ -756,7 +789,15 @@ export class LinkPageService {
       page,
       pageFields,
       page.type === LinkPageType.POST && { postNetwork, postUrl },
-      page.type === LinkPageType.FORM && form && { form },
+      // cohort/closedAt only change through setFormState (autosave can't reopen).
+      page.type === LinkPageType.FORM &&
+        form && {
+          form: {
+            ...form,
+            cohort: page.form?.cohort,
+            closedAt: page.form?.closedAt ?? null,
+          },
+        },
       page.type === LinkPageType.FORM &&
         formWebhookUrl !== undefined && { formWebhookUrl },
       !page.parentPageId && { gtmContainerId, ga4MeasurementId },
@@ -1059,7 +1100,7 @@ export class LinkPageService {
     const page = await this.getPageForCompany(auth.companyId, linkPageId);
     const idsOf = (type: ReorderContentDto[number]['type']) =>
       dto.filter((item) => item.type === type).map((item) => item.id);
-    const [links, images, videos] = await Promise.all([
+    const [links, images, videos, texts] = await Promise.all([
       this.linkRepository.find({
         where: { id: In(idsOf('LINK')), linkPageId },
       }),
@@ -1069,9 +1110,15 @@ export class LinkPageService {
       this.videoRepository.find({
         where: { id: In(idsOf('VIDEO')), linkPageId },
       }),
+      this.textRepository.find({
+        where: { id: In(idsOf('TEXT')), linkPageId },
+      }),
     ]);
 
-    if (links.length + images.length + videos.length !== dto.length) {
+    if (
+      links.length + images.length + videos.length + texts.length !==
+      dto.length
+    ) {
       throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
@@ -1088,11 +1135,12 @@ export class LinkPageService {
         return item;
       });
 
-    // ponytail: three saves without a transaction, like the other reorders; the next drag rewrites every position anyway.
+    // ponytail: four saves without a transaction, like the other reorders; the next drag rewrites every position anyway.
     await Promise.all([
       this.linkRepository.save(withOrder('LINK', links)),
       this.imageRepository.save(withOrder('IMAGE', images)),
       this.videoRepository.save(withOrder('VIDEO', videos)),
+      this.textRepository.save(withOrder('TEXT', texts)),
     ]);
 
     await this.invalidatePublicPageCache(page);
@@ -1340,6 +1388,60 @@ export class LinkPageService {
     return { message: 'Vídeo removido com sucesso' };
   }
 
+  async createText(
+    auth: AuthPayload,
+    linkPageId: string,
+    dto: LinkPageTextDto,
+  ) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const text = this.textRepository.create({ ...dto, linkPageId });
+    const response = toTextResponse(await this.textRepository.save(text));
+
+    await this.invalidatePublicPageCache(page);
+
+    return response;
+  }
+
+  async updateText(
+    auth: AuthPayload,
+    linkPageId: string,
+    textId: string,
+    dto: UpdateLinkPageTextDto,
+  ) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const text = await this.textRepository.findOne({
+      where: { id: textId, linkPageId },
+    });
+
+    if (!text) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+    }
+
+    Object.assign(text, dto);
+
+    const response = toTextResponse(await this.textRepository.save(text));
+
+    await this.invalidatePublicPageCache(page);
+
+    return response;
+  }
+
+  async deleteText(auth: AuthPayload, linkPageId: string, textId: string) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const result = await this.textRepository.softDelete({
+      id: textId,
+      linkPageId,
+    });
+
+    if (!result.affected) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+    }
+
+    await this.invalidatePublicPageCache(page);
+
+    return { message: 'Texto removido com sucesso' };
+  }
+
   async recordPublicEvent(
     linkPageId: string,
     dto: AnalyticsEventDto,
@@ -1454,31 +1556,114 @@ export class LinkPageService {
       });
     }
 
-    const submission = await this.submissionRepository.save(
-      this.submissionRepository.create({
-        linkPageId,
-        answers: result.answers,
-        visitorId: dto.visitorId ?? null,
-        durationMs: dto.durationMs ?? null,
-        ipAddress: resolveClientIp(context),
-        countryCode:
-          normalizeCountryCode(
-            getHeaderValue(context.headers, 'cf-ipcountry'),
-          ) ??
-          normalizeCountryCode(
-            getHeaderValue(context.headers, 'x-vercel-ip-country'),
-          ),
-        deviceType: detectDeviceType(userAgent),
-        browser: detectBrowser(userAgent),
-        operatingSystem: detectOperatingSystem(userAgent),
-        userAgent: userAgent.slice(0, 1000) || null,
-      }),
+    const { submission, closed } = await this.dataSource.transaction(
+      async (manager) => {
+        // Row lock serializes this form's submissions: limit and unique checks can't race.
+        const locked = await manager.findOneOrFail(LinkPageEntity, {
+          where: { id: linkPageId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const form = locked.form!;
+        const cohort = formCohort(form);
+        const submissions = manager.getRepository(LinkPageFormSubmissionEntity);
+
+        if (form.closedAt) {
+          throw new AppException(ERROR_CODES.LINK_PAGE_FORM_CLOSED);
+        }
+
+        for (const field of form.fields.filter((field) => field.unique)) {
+          const value = result.answers.find(
+            (answer) => answer.id === field.id,
+          )?.value;
+          if (typeof value !== 'string') continue;
+
+          const taken = await submissions
+            .createQueryBuilder('submission')
+            .where('submission.linkPageId = :linkPageId', { linkPageId })
+            .andWhere('submission.cohort = :cohort', { cohort })
+            .andWhere(
+              `EXISTS (SELECT 1 FROM jsonb_array_elements(submission.answers) answer
+                WHERE answer->>'id' = :fieldId AND lower(answer->>'value') = lower(:value))`,
+              { fieldId: field.id, value },
+            )
+            .getExists();
+
+          if (taken) {
+            throw new AppException(
+              ERROR_CODES.LINK_PAGE_FORM_ALREADY_ANSWERED,
+              {
+                message: `Já existe uma resposta registrada com este "${field.label}". Não é possível enviar o formulário novamente com o mesmo valor.`,
+                details: [{ path: field.id, message: 'Já respondido' }],
+              },
+            );
+          }
+        }
+
+        const count = form.maxResponses
+          ? await submissions.count({ where: { linkPageId, cohort } })
+          : 0;
+        const closeForm = async () => {
+          locked.form = { ...form, closedAt: new Date().toISOString() };
+          await manager.save(locked);
+        };
+
+        // Limit lowered in the editor below what this cohort already has.
+        if (form.maxResponses && count >= form.maxResponses) {
+          await closeForm();
+          return { submission: null, closed: true };
+        }
+
+        const scored = scoreFormAnswers(form, result.answers);
+        const saved = await submissions.save(
+          submissions.create({
+            linkPageId,
+            cohort,
+            answers: result.answers,
+            score: scored?.score ?? null,
+            scoreMax: scored?.max ?? null,
+            visitorId: dto.visitorId ?? null,
+            durationMs: dto.durationMs ?? null,
+            ipAddress: resolveClientIp(context),
+            countryCode:
+              normalizeCountryCode(
+                getHeaderValue(context.headers, 'cf-ipcountry'),
+              ) ??
+              normalizeCountryCode(
+                getHeaderValue(context.headers, 'x-vercel-ip-country'),
+              ),
+            deviceType: detectDeviceType(userAgent),
+            browser: detectBrowser(userAgent),
+            operatingSystem: detectOperatingSystem(userAgent),
+            userAgent: userAgent.slice(0, 1000) || null,
+          }),
+        );
+
+        // This answer filled the cohort: close right away.
+        const full = Boolean(
+          form.maxResponses && count + 1 >= form.maxResponses,
+        );
+        if (full) await closeForm();
+
+        return { submission: saved, closed: full };
+      },
     );
+
+    if (closed) await this.invalidatePublicPageCache(page);
+
+    if (!submission) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_FORM_CLOSED);
+    }
 
     // Answer is already stored; the sheet is best effort (resend covers failures).
     void this.deliverToSheet(page, submission);
 
-    return { id: submission.id };
+    return {
+      id: submission.id,
+      score:
+        page.form.scoring?.show && submission.score !== null
+          ? { score: submission.score, max: submission.scoreMax }
+          : null,
+    };
   }
 
   /** POSTs one answer to the form's Apps Script; marks it delivered on `{ok:true}`. */
@@ -1547,17 +1732,63 @@ export class LinkPageService {
   async listSubmissions(auth: AuthPayload, linkPageId: string) {
     const page = await this.getPageForCompany(auth.companyId, linkPageId);
 
-    if (page.type !== LinkPageType.FORM) {
+    if (page.type !== LinkPageType.FORM || !page.form) {
       throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
-    const [items, total] = await this.submissionRepository.findAndCount({
-      where: { linkPageId },
-      order: { createdAt: 'DESC' },
-      take: formSubmissionsLimit,
-    });
+    const [[items, total], cohortTotal] = await Promise.all([
+      this.submissionRepository.findAndCount({
+        where: { linkPageId },
+        order: { createdAt: 'DESC' },
+        take: formSubmissionsLimit,
+      }),
+      this.submissionRepository.count({
+        where: { linkPageId, cohort: formCohort(page.form) },
+      }),
+    ]);
 
-    return { items: items.map(toFormSubmissionResponse), total };
+    return { items: items.map(toFormSubmissionResponse), total, cohortTotal };
+  }
+
+  /**
+   * Close now, or reopen. Reopening may start a new cohort (unique fields and
+   * the limit count per cohort) and set a new limit.
+   */
+  async setFormState(auth: AuthPayload, linkPageId: string, dto: FormStateDto) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+
+    if (page.type !== LinkPageType.FORM || !page.form) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+    }
+
+    if (dto.closed) {
+      page.form = {
+        ...page.form,
+        closedAt: page.form.closedAt ?? new Date().toISOString(),
+      };
+    } else {
+      const cohort = dto.cohort ?? formCohort(page.form);
+      const maxResponses =
+        dto.maxResponses === undefined
+          ? page.form.maxResponses
+          : dto.maxResponses;
+
+      if (
+        maxResponses &&
+        (await this.submissionRepository.count({
+          where: { linkPageId, cohort },
+        })) >= maxResponses
+      ) {
+        throw new AppException(ERROR_CODES.LINK_PAGE_FORM_LIMIT_TOO_LOW);
+      }
+
+      page.form = { ...page.form, cohort, maxResponses, closedAt: null };
+    }
+
+    await this.linkPageRepository.save(page);
+    await this.invalidatePublicPageCache(page);
+
+    return this.get(auth, linkPageId);
   }
 
   async deleteSubmission(
@@ -1594,13 +1825,14 @@ export class LinkPageService {
   }
 
   private async assertAnalyticsAccess(auth: AuthPayload, linkPageId: string) {
-    const [company] = await Promise.all([
+    const [company, page] = await Promise.all([
       this.getCompany(auth),
       this.getPageForCompany(auth.companyId, linkPageId),
     ]);
 
     return {
       company,
+      page,
       tier: entitlementsFor(company).analyticsTier,
     };
   }
@@ -1677,14 +1909,22 @@ export class LinkPageService {
       ? await this.submissionRepository
           .createQueryBuilder('submission')
           .select('submission.linkPageId', 'linkPageId')
+          .addSelect('submission.cohort', 'cohort')
           .addSelect('COUNT(*)', 'count')
           .where('submission.linkPageId IN (:...formIds)', { formIds })
           .groupBy('submission.linkPageId')
-          .getRawMany<{ linkPageId: string; count: string }>()
+          .addGroupBy('submission.cohort')
+          .getRawMany<{ linkPageId: string; cohort: string; count: string }>()
       : [];
-    const submissionsByPage = new Map(
-      submissionRows.map((row) => [row.linkPageId, Number(row.count)]),
-    );
+    const submissionsByPage = new Map<string, number>();
+    const cohortCounts = new Map<string, number>();
+    for (const row of submissionRows) {
+      submissionsByPage.set(
+        row.linkPageId,
+        (submissionsByPage.get(row.linkPageId) ?? 0) + Number(row.count),
+      );
+      cohortCounts.set(`${row.linkPageId}:${row.cohort}`, Number(row.count));
+    }
 
     return {
       tier,
@@ -1705,6 +1945,12 @@ export class LinkPageService {
             clicks: Number(row?.clicks ?? 0),
             /** All-time total (not limited to the analytics window). */
             submissions: submissionsByPage.get(page.id) ?? 0,
+            formLimit: page.form
+              ? toFormLimit(
+                  page.form,
+                  cohortCounts.get(`${page.id}:${formCohort(page.form)}`) ?? 0,
+                )
+              : null,
           };
         })
         .sort((a, b) => b.pageViews - a.pageViews || b.clicks - a.clicks),
@@ -1717,9 +1963,10 @@ export class LinkPageService {
     from?: string,
     to?: string,
   ) {
-    const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
+    const { tier, page } = await this.assertAnalyticsAccess(auth, linkPageId);
     const range = this.parseAnalyticsRange(tier, from, to);
     const [
+      formLimit,
       summary,
       topTargets,
       timeseries,
@@ -1728,6 +1975,12 @@ export class LinkPageService {
       countries,
       visitorIps,
     ] = await Promise.all([
+      // Cohort-wide (not the period): what the limit counts.
+      page.form?.maxResponses
+        ? this.submissionRepository
+            .count({ where: { linkPageId, cohort: formCohort(page.form) } })
+            .then((current) => toFormLimit(page.form, current))
+        : null,
       this.getAnalyticsSummaryData(linkPageId, range),
       this.getTopTargets(linkPageId, range, tier === 'BASIC' ? 5 : undefined),
       tier === 'FULL'
@@ -1752,6 +2005,7 @@ export class LinkPageService {
         to: range.to.toISOString(),
       },
       summary,
+      formLimit,
       topTargets,
       timeseries,
       sources,
@@ -1998,7 +2252,7 @@ export class LinkPageService {
       throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
-    const [links, socialLinks, images, videos] = await Promise.all([
+    const [links, socialLinks, images, videos, texts] = await Promise.all([
       this.linkRepository.find({
         where: { active: true, deletedAt: IsNull(), linkPageId: page.id },
         order: { placement: 'ASC', sortOrder: 'ASC', createdAt: 'ASC' },
@@ -2015,6 +2269,10 @@ export class LinkPageService {
         where: { active: true, deletedAt: IsNull(), linkPageId: page.id },
         order: { sortOrder: 'ASC', createdAt: 'ASC' },
       }),
+      this.textRepository.find({
+        where: { active: true, deletedAt: IsNull(), linkPageId: page.id },
+        order: { sortOrder: 'ASC', createdAt: 'ASC' },
+      }),
     ]);
 
     page.links = links.filter((link) =>
@@ -2026,6 +2284,7 @@ export class LinkPageService {
     page.socialLinks = socialLinks;
     page.images = images;
     page.videos = videos;
+    page.texts = texts;
 
     const detail = toLinkPageDetail(page);
     const response: PublicLinkPageResponse = {
@@ -2057,7 +2316,7 @@ export class LinkPageService {
       footerUrl: detail.footerUrl,
       footerLogoUrl: detail.footerLogoUrl,
       parentSlug: postSlug ? slug : null,
-      form: detail.form,
+      form: toPublicForm(detail.form),
       postNetwork: detail.postNetwork,
       postUrl: detail.postUrl,
       gtmContainerId: bio!.gtmContainerId,
@@ -2066,6 +2325,7 @@ export class LinkPageService {
       socialLinks: detail.socialLinks,
       images: detail.images,
       videos: detail.videos,
+      texts: detail.texts,
     };
 
     await this.publicCache?.set(normalizedHostname, cachePath, response);

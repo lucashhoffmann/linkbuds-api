@@ -113,7 +113,11 @@ export type CreateFormPageDto = z.infer<typeof createFormPageDto>;
 export const submitFormDto = z.object({
   answers: z.record(
     z.string().max(40),
-    z.union([z.string().max(5000), z.boolean()]),
+    z.union([
+      z.string().max(5000),
+      z.boolean(),
+      z.array(z.string().max(500)).max(31),
+    ]),
   ),
   visitorId: optionalText(120),
   website: z.string().max(200).optional(),
@@ -122,6 +126,17 @@ export const submitFormDto = z.object({
 });
 
 export type SubmitFormDto = z.infer<typeof submitFormDto>;
+
+/** Close a form now, or reopen it (optionally as a new cohort with a new limit). */
+export const formStateDto = z.object({
+  closed: z.boolean(),
+  /** Reopen only. Absent = keep the current cohort. */
+  cohort: z.string().trim().min(1).max(60).optional(),
+  /** Reopen only. Absent = keep; null = no limit. */
+  maxResponses: z.number().int().min(1).max(1_000_000).nullable().optional(),
+});
+
+export type FormStateDto = z.infer<typeof formStateDto>;
 
 export const updateLinkPageDto = z
   .object({
@@ -267,6 +282,33 @@ export const linkPageVideoDto = z.object({
 
 export const updateLinkPageVideoDto = partialUpdateDto(linkPageVideoDto);
 
+export const textRunSchema = z.object({
+  text: z.string().min(1).max(5000),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  color: colorSchema.optional(),
+  size: z.enum(['SM', 'MD', 'LG', 'XL']).optional(),
+});
+
+export const linkPageTextDto = z.object({
+  content: z
+    .array(textRunSchema)
+    .min(1)
+    .max(300)
+    .refine(
+      (runs) => runs.reduce((total, run) => total + run.text.length, 0) <= 5000,
+    ),
+  style: z.enum(LinkPageFooterStyle).default(LinkPageFooterStyle.TEXT),
+  align: z.enum(['LEFT', 'CENTER', 'RIGHT']).default('LEFT'),
+  backgroundColor: colorSchema.nullable().default(null),
+  borderColor: colorSchema.nullable().default(null),
+  fullWidth: z.boolean().default(false),
+  sortOrder: z.number().int().min(0).default(0),
+  active: z.boolean().default(true),
+});
+
+export const updateLinkPageTextDto = partialUpdateDto(linkPageTextDto);
+
 export const reorderItemsDto = z.array(
   z.object({
     id: z.string().uuid(),
@@ -274,10 +316,10 @@ export const reorderItemsDto = z.array(
   }),
 );
 
-/** One shared order for links, images and videos (the page renders them interleaved). */
+/** One shared order for links, images, videos and texts (the page renders them interleaved). */
 export const reorderContentDto = z.array(
   z.object({
-    type: z.enum(['LINK', 'IMAGE', 'VIDEO']),
+    type: z.enum(['LINK', 'IMAGE', 'VIDEO', 'TEXT']),
     id: z.string().uuid(),
     sortOrder: z.number().int().min(0),
   }),
@@ -322,6 +364,9 @@ export type LinkPageImageDto = z.infer<typeof linkPageImageDto>;
 export type UpdateLinkPageImageDto = z.infer<typeof updateLinkPageImageDto>;
 export type LinkPageVideoDto = z.infer<typeof linkPageVideoDto>;
 export type UpdateLinkPageVideoDto = z.infer<typeof updateLinkPageVideoDto>;
+export type TextRun = z.infer<typeof textRunSchema>;
+export type LinkPageTextDto = z.infer<typeof linkPageTextDto>;
+export type UpdateLinkPageTextDto = z.infer<typeof updateLinkPageTextDto>;
 export type ReorderItemsDto = z.infer<typeof reorderItemsDto>;
 export type ReorderContentDto = z.infer<typeof reorderContentDto>;
 export type AnalyticsEventDto = z.infer<typeof analyticsEventDto>;

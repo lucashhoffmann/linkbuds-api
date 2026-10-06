@@ -3,6 +3,7 @@ import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
 import { LinkPageLinkEntity } from '../domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from '../domain/entities/link-page-social-link.entity';
 import { LinkPageVideoEntity } from '../domain/entities/link-page-video.entity';
+import { LinkPageTextEntity } from '../domain/entities/link-page-text.entity';
 import { LinkPageEntity } from '../domain/entities/link-page.entity';
 
 export function toLinkPageSummary(page: LinkPageEntity) {
@@ -85,11 +86,26 @@ export function toVideoResponse(video: LinkPageVideoEntity) {
   };
 }
 
+export function toTextResponse(text: LinkPageTextEntity) {
+  return {
+    id: text.id,
+    content: text.content,
+    style: text.style,
+    align: text.align,
+    backgroundColor: text.backgroundColor,
+    borderColor: text.borderColor,
+    fullWidth: text.fullWidth,
+    sortOrder: text.sortOrder,
+    active: text.active,
+  };
+}
+
 export function toFormSubmissionResponse(
   submission: LinkPageFormSubmissionEntity,
 ) {
   return {
     id: submission.id,
+    cohort: submission.cohort,
     answers: submission.answers,
     visitorId: submission.visitorId,
     ipAddress: submission.ipAddress,
@@ -98,6 +114,8 @@ export function toFormSubmissionResponse(
     browser: submission.browser,
     operatingSystem: submission.operatingSystem,
     durationMs: submission.durationMs,
+    score: submission.score,
+    scoreMax: submission.scoreMax,
     webhookDeliveredAt: submission.webhookDeliveredAt,
     createdAt: submission.createdAt,
   };
@@ -134,5 +152,6 @@ export function toLinkPageDetail(page: LinkPageEntity) {
     socialLinks: (page.socialLinks ?? []).map(toSocialLinkResponse),
     images: (page.images ?? []).map(toImageResponse),
     videos: (page.videos ?? []).map(toVideoResponse),
+    texts: (page.texts ?? []).map(toTextResponse),
   };
 }

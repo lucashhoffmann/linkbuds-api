@@ -72,6 +72,7 @@ function createService(options?: {
   const socialLinkRepository = createRepositoryMock();
   const imageRepository = createRepositoryMock();
   const videoRepository = createRepositoryMock();
+  const textRepository = createRepositoryMock();
   const analyticsRepository =
     options?.analyticsRepository ?? createRepositoryMock();
   const publicCache = {
@@ -100,6 +101,7 @@ function createService(options?: {
     socialLinkRepository as never,
     imageRepository as never,
     videoRepository as never,
+    textRepository as never,
     analyticsRepository as never,
     createRepositoryMock() as never,
     options?.presenceService as never,
@@ -113,6 +115,7 @@ function createService(options?: {
     domainRepository,
     imageRepository,
     videoRepository,
+    textRepository,
     linkRepository,
     linkPageRepository,
     publicCache,
@@ -387,6 +390,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
+      createRepositoryMock() as never,
       analyticsRepository as never,
       createRepositoryMock() as never,
     );
@@ -648,6 +652,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
+      createRepositoryMock() as never,
       analyticsRepository as never,
       createRepositoryMock() as never,
     );
@@ -694,6 +699,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       linkPageRepository as never,
+      createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
@@ -1047,12 +1053,13 @@ describe('LinkPageService', () => {
     expect(videoRepository.save).toHaveBeenCalledTimes(1);
   });
 
-  it('reorders links, images and videos in one shared order', async () => {
+  it('reorders links, images, videos and texts in one shared order', async () => {
     const {
       imageRepository,
       linkPageRepository,
       linkRepository,
       service,
+      textRepository,
       videoRepository,
     } = createService();
     linkPageRepository.findOne.mockResolvedValue({
@@ -1062,11 +1069,13 @@ describe('LinkPageService', () => {
     linkRepository.find.mockResolvedValue([{ id: 'link-a', sortOrder: 0 }]);
     imageRepository.find.mockResolvedValue([{ id: 'image-a', sortOrder: 1 }]);
     videoRepository.find.mockResolvedValue([{ id: 'video-a', sortOrder: 2 }]);
+    textRepository.find.mockResolvedValue([{ id: 'text-a', sortOrder: 3 }]);
 
     await service.reorderContent(auth, 'page-id', [
       { type: 'VIDEO', id: 'video-a', sortOrder: 0 },
       { type: 'LINK', id: 'link-a', sortOrder: 1 },
       { type: 'IMAGE', id: 'image-a', sortOrder: 2 },
+      { type: 'TEXT', id: 'text-a', sortOrder: 3 },
     ]);
 
     expect(videoRepository.save).toHaveBeenCalledWith([
@@ -1078,8 +1087,12 @@ describe('LinkPageService', () => {
     expect(imageRepository.save).toHaveBeenCalledWith([
       { id: 'image-a', sortOrder: 2 },
     ]);
+    expect(textRepository.save).toHaveBeenCalledWith([
+      { id: 'text-a', sortOrder: 3 },
+    ]);
 
     videoRepository.find.mockResolvedValue([]);
+    textRepository.find.mockResolvedValue([]);
     await expect(
       service.reorderContent(auth, 'page-id', [
         { type: 'VIDEO', id: 'video-of-other-page', sortOrder: 0 },

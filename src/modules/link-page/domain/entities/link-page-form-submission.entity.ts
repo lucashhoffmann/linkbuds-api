@@ -22,6 +22,10 @@ export class LinkPageFormSubmissionEntity {
   @JoinColumn({ name: 'link_page_id' })
   linkPage!: LinkPageEntity;
 
+  /** Form's cohort when answered (reopening can start a new one). */
+  @Column({ name: 'cohort', type: 'varchar', length: 60, nullable: false })
+  cohort!: string;
+
   @Column({ name: 'answers', type: 'jsonb', nullable: false })
   answers!: FormAnswer[];
 
@@ -54,6 +58,14 @@ export class LinkPageFormSubmissionEntity {
   /** Time from opening the form to submitting it (client-measured). */
   @Column({ name: 'duration_ms', type: 'integer', nullable: true })
   durationMs!: number | null;
+
+  /** Questionnaire score; null when the form only collects. */
+  @Column({ name: 'score', type: 'integer', nullable: true })
+  score!: number | null;
+
+  /** Best possible score when answered (the form may change later). */
+  @Column({ name: 'score_max', type: 'integer', nullable: true })
+  scoreMax!: number | null;
 
   /** Set once the Google Sheets webhook accepted it; null = pending/failed. */
   @Column({ name: 'webhook_delivered_at', type: 'timestamptz', nullable: true })

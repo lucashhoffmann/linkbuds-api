@@ -11,6 +11,7 @@ import { LinkPageAnalyticsEventEntity } from './domain/entities/link-page-analyt
 import { LinkPageFormSubmissionEntity } from './domain/entities/link-page-form-submission.entity';
 import { LinkPageImageEntity } from './domain/entities/link-page-image.entity';
 import { LinkPageVideoEntity } from './domain/entities/link-page-video.entity';
+import { LinkPageTextEntity } from './domain/entities/link-page-text.entity';
 import { LinkPageEntity } from './domain/entities/link-page.entity';
 import { LinkPageLinkEntity } from './domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from './domain/entities/link-page-social-link.entity';
@@ -27,6 +28,7 @@ import { PublicLinkPageController } from './presentation/public-link-page.contro
       LinkPageSocialLinkEntity,
       LinkPageImageEntity,
       LinkPageVideoEntity,
+      LinkPageTextEntity,
       LinkPageAnalyticsEventEntity,
       LinkPageFormSubmissionEntity,
     ]),

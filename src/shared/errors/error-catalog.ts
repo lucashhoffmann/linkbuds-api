@@ -180,6 +180,20 @@ export const ERRORS = {
     status: HttpStatus.BAD_REQUEST,
     message: 'Confira os campos destacados',
   },
+  LINK_PAGE_FORM_CLOSED: {
+    status: HttpStatus.CONFLICT,
+    message: 'Este formulário não está mais recebendo respostas',
+  },
+  LINK_PAGE_FORM_ALREADY_ANSWERED: {
+    status: HttpStatus.CONFLICT,
+    message:
+      'Já existe uma resposta registrada com este valor. Não é possível enviar o formulário novamente',
+  },
+  LINK_PAGE_FORM_LIMIT_TOO_LOW: {
+    status: HttpStatus.BAD_REQUEST,
+    message:
+      'O limite precisa ser maior que as respostas já recebidas neste corte',
+  },
   LINK_PAGE_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'LinkPage não encontrada',

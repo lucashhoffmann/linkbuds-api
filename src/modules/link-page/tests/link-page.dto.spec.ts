@@ -2,6 +2,7 @@ import {
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
+  linkPageTextDto,
   linkPageVideoDto,
   updateLinkPageDto,
   updateLinkPageImageDto,
@@ -118,5 +119,30 @@ describe('LinkPage DTOs', () => {
     for (const url of rejected) {
       expect(linkPageVideoDto.safeParse({ url }).success).toBe(false);
     }
+  });
+
+  it('accepts formatted text runs and rejects HTML-ish or invalid styles', () => {
+    const parsed = linkPageTextDto.parse({
+      content: [
+        { text: 'Promo ', bold: true, color: '#ff0000', size: 'LG' },
+        { text: 'até sexta\n<b>ok</b>', italic: true },
+      ],
+    });
+    expect(parsed.content[0].color).toBe('#FF0000');
+    expect(parsed.content[1].text).toContain('<b>');
+
+    expect(linkPageTextDto.safeParse({ content: [] }).success).toBe(false);
+    expect(
+      linkPageTextDto.safeParse({ content: [{ text: 'x', color: 'red' }] })
+        .success,
+    ).toBe(false);
+    expect(
+      linkPageTextDto.safeParse({ content: [{ text: 'x', size: 'HUGE' }] })
+        .success,
+    ).toBe(false);
+    expect(
+      linkPageTextDto.safeParse({ content: [{ text: 'x'.repeat(5001) }] })
+        .success,
+    ).toBe(false);
   });
 });

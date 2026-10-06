@@ -11,9 +11,14 @@ export const FORM_FIELD_TYPES = [
   'DATE',
   'SELECT',
   'CHECKBOX',
+  'CHOICE',
+  'MULTI_CHOICE',
 ] as const;
 
 export type FormFieldType = (typeof FORM_FIELD_TYPES)[number];
+
+/** Types answered by picking from `options` (the ones that can score). */
+const optionTypes: FormFieldType[] = ['SELECT', 'CHOICE', 'MULTI_CHOICE'];
 
 export const formFieldSchema = z
   .object({
@@ -24,15 +29,44 @@ export const formFieldSchema = z
     required: z.boolean(),
     placeholder: z.string().trim().max(120).nullable().optional(),
     options: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
+    /** Score of each option, same order as `options`. Absent = 0. */
+    points: z.array(z.number().int().min(-1000).max(1000)).max(30).optional(),
+    /** CHOICE/MULTI_CHOICE: extra free-text answer ("Outro"). */
+    allowOther: z.boolean().optional(),
+    /** One answer per value within the cohort (e.g. one per email). */
+    unique: z.boolean().optional(),
   })
   .refine(
-    (field) => field.type !== 'SELECT' || (field.options?.length ?? 0) > 0,
+    (field) =>
+      !optionTypes.includes(field.type) || (field.options?.length ?? 0) > 0,
     { message: 'Lista precisa de ao menos uma opção', path: ['options'] },
+  )
+  .refine(
+    (field) =>
+      !(
+        field.unique &&
+        (field.type === 'CHECKBOX' || field.type === 'MULTI_CHOICE')
+      ),
+    {
+      message: 'Este tipo de campo não pode ser de resposta única',
+      path: ['unique'],
+    },
   );
 
 export const formConfigSchema = z
   .object({
     fields: z.array(formFieldSchema).max(30),
+    /** LIST = every field on one screen; QUESTIONNAIRE = one per step. Absent = LIST. */
+    mode: z.enum(['LIST', 'QUESTIONNAIRE']).optional(),
+    /**
+     * null/absent = only collect. POINTS = sum of the chosen options' points;
+     * CORRECT = options with points > 0 are the right ones, score = questions
+     * answered right. `show` = visitor sees the score after submitting.
+     */
+    scoring: z
+      .object({ kind: z.enum(['POINTS', 'CORRECT']), show: z.boolean() })
+      .nullable()
+      .optional(),
     submitLabel: z.string().trim().min(1).max(40),
     successMessage: z.string().trim().min(1).max(300),
     /** Animated check with the success message. Absent = on. */
@@ -45,6 +79,11 @@ export const formConfigSchema = z
       .pipe(z.url({ protocol: /^https?$/ }))
       .nullable()
       .optional(),
+    /** Answers per cohort; reaching it closes the form. null/absent = no limit. */
+    maxResponses: z.number().int().min(1).max(1_000_000).nullable().optional(),
+    /** Server-owned (set by close/reopen): PATCH keeps the stored values. */
+    cohort: z.string().trim().min(1).max(60).optional(),
+    closedAt: z.string().nullable().optional(),
   })
   .refine(
     (form) =>
@@ -54,6 +93,26 @@ export const formConfigSchema = z
 
 export type FormField = z.infer<typeof formFieldSchema>;
 export type FormConfig = z.infer<typeof formConfigSchema>;
+
+/** Forms created before cohorts existed answer into cohort '1'. */
+export function formCohort(form: Pick<FormConfig, 'cohort'>) {
+  return form.cohort ?? '1';
+}
+
+/** Progress toward the response limit; null when the form has no limit. */
+export function toFormLimit(
+  form: FormConfig | null | undefined,
+  current: number,
+) {
+  if (!form?.maxResponses) return null;
+
+  return {
+    max: form.maxResponses,
+    current,
+    cohort: formCohort(form),
+    closed: Boolean(form.closedAt),
+  };
+}
 
 export function defaultFormConfig(): FormConfig {
   return {
@@ -70,17 +129,32 @@ export function defaultFormConfig(): FormConfig {
 export type FormAnswer = {
   id: string;
   label: string;
-  value: string | boolean | null;
+  value: string | boolean | string[] | null;
 };
 
-const valueSchemas: Record<FormFieldType, z.ZodType<string | boolean>> = {
+const otherText = z.string().trim().min(1).max(500);
+
+const valueSchemas: Record<
+  FormFieldType,
+  z.ZodType<string | boolean | string[]>
+> = {
   TEXT: z.string().trim().max(500),
   TEXTAREA: z.string().trim().max(5000),
   EMAIL: z.string().trim().max(254).pipe(z.email()),
+  // Brazilian number: DDD + landline (8 digits) or mobile (9 + 8). Stored
+  // formatted, so "42988112334" and "(42) 98811-2334" match on `unique`.
+  // ponytail: BR only, accept E.164 if forms go international.
   PHONE: z
     .string()
-    .trim()
-    .regex(/^[0-9+()\-\s]{6,30}$/),
+    .max(30)
+    .transform((value) =>
+      value.replace(/\D/g, '').replace(/^55(?=\d{10,11}$)/, ''),
+    )
+    .pipe(z.string().regex(/^[1-9][1-9](9\d{8}|[2-8]\d{7})$/))
+    .transform(
+      (digits) =>
+        `(${digits.slice(0, 2)}) ${digits.slice(2, -4)}-${digits.slice(-4)}`,
+    ),
   URL: z
     .string()
     .trim()
@@ -94,6 +168,12 @@ const valueSchemas: Record<FormFieldType, z.ZodType<string | boolean>> = {
   DATE: z.iso.date(),
   SELECT: z.string().trim(),
   CHECKBOX: z.boolean(),
+  CHOICE: z.string().trim().max(500),
+  // ponytail: dedupes but keeps the visitor's order
+  MULTI_CHOICE: z
+    .array(otherText)
+    .max(31)
+    .transform((values) => [...new Set(values)]),
 };
 
 function isEmpty(value: unknown) {
@@ -101,8 +181,25 @@ function isEmpty(value: unknown) {
     value === undefined ||
     value === null ||
     value === false ||
-    (typeof value === 'string' && value.trim() === '')
+    (typeof value === 'string' && value.trim() === '') ||
+    (Array.isArray(value) && value.length === 0)
   );
+}
+
+/** Option answers must be in the list; "Outro" allows one free-text value. */
+function isAllowedChoice(field: FormField, value: string | boolean | string[]) {
+  const options = field.options ?? [];
+  if (field.type === 'SELECT') return options.includes(value as string);
+  if (field.type === 'CHOICE') {
+    return options.includes(value as string) || Boolean(field.allowOther);
+  }
+  if (field.type === 'MULTI_CHOICE') {
+    const others = (value as string[]).filter((v) => !options.includes(v));
+    return (
+      others.length === 0 || (Boolean(field.allowOther) && others.length === 1)
+    );
+  }
+  return true;
 }
 
 /**
@@ -133,10 +230,7 @@ export function validateFormAnswers(
     }
 
     const parsed = valueSchemas[field.type].safeParse(value);
-    const valid =
-      parsed.success &&
-      (field.type !== 'SELECT' ||
-        (field.options ?? []).includes(parsed.data as string));
+    const valid = parsed.success && isAllowedChoice(field, parsed.data);
 
     if (!valid) {
       invalid.push(field.id);
@@ -147,6 +241,69 @@ export function validateFormAnswers(
   }
 
   return invalid.length ? { ok: false, invalid } : { ok: true, answers };
+}
+
+export type FormScore = { score: number; max: number };
+
+/**
+ * Scores the stored answers; null when the form only collects. Fields without
+ * any points don't count (e.g. Nome/Email in a quiz).
+ */
+export function scoreFormAnswers(
+  form: Pick<FormConfig, 'fields' | 'scoring'>,
+  answers: FormAnswer[],
+): FormScore | null {
+  if (!form.scoring) return null;
+
+  let score = 0;
+  let max = 0;
+
+  for (const field of form.fields) {
+    if (!optionTypes.includes(field.type)) continue;
+    const options = field.options ?? [];
+    const points = options.map((_, index) => field.points?.[index] ?? 0);
+    if (!points.some(Boolean)) continue;
+
+    const value = answers.find((answer) => answer.id === field.id)?.value;
+    const chosen = new Set(
+      Array.isArray(value) ? value : typeof value === 'string' ? [value] : [],
+    );
+    const picked = options.flatMap((option, index) =>
+      chosen.has(option) ? [points[index]] : [],
+    );
+    const multiple = field.type === 'MULTI_CHOICE';
+
+    if (form.scoring.kind === 'CORRECT') {
+      // Right = picked exactly the options with points (all of them when multiple).
+      const right = options.filter((_, index) => points[index] > 0);
+      max += 1;
+      if (
+        multiple
+          ? right.length === chosen.size && right.every((o) => chosen.has(o))
+          : picked.length === 1 && picked[0] > 0
+      ) {
+        score += 1;
+      }
+      continue;
+    }
+
+    score += picked.reduce((sum, point) => sum + point, 0);
+    max += multiple
+      ? points.filter((point) => point > 0).reduce((sum, p) => sum + p, 0)
+      : Math.max(0, ...points);
+  }
+
+  return { score, max };
+}
+
+/** Public copy of the form: points stay on the server (they'd give the quiz away). */
+export function toPublicForm(form: FormConfig | null) {
+  if (!form) return form;
+
+  return {
+    ...form,
+    fields: form.fields.map((field) => ({ ...field, points: undefined })),
+  };
 }
 
 /**
@@ -162,7 +319,9 @@ export function toSheetRow(
   form: { id: string; name: string },
   submission: {
     id: string;
+    cohort: string;
     answers: FormAnswer[];
+    score: number | null;
     createdAt: Date;
     ipAddress: string | null;
     countryCode: string | null;
@@ -176,13 +335,18 @@ export function toSheetRow(
       ? 'Sim'
       : answer.value === false
         ? 'Não'
-        : answer.value;
+        : Array.isArray(answer.value)
+          ? answer.value.join(', ')
+          : answer.value;
+  const scored = submission.score !== null;
 
   return {
     form,
     submissionId: submission.id,
     columns: [
       'Data',
+      'Corte',
+      ...(scored ? ['Nota'] : []),
       ...submission.answers.map((answer) => answer.label),
       'IP',
       'País',
@@ -190,6 +354,8 @@ export function toSheetRow(
     ],
     row: [
       submission.createdAt.toISOString(),
+      submission.cohort,
+      ...(scored ? [submission.score] : []),
       ...submission.answers.map(value),
       submission.ipAddress,
       submission.countryCode,

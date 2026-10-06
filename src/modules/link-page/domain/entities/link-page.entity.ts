@@ -23,6 +23,7 @@ import { LinkPageStatus } from '../enums/link-page-status.enum';
 import { LinkPageType } from '../enums/link-page-type.enum';
 import { LinkPageImageEntity } from './link-page-image.entity';
 import { LinkPageVideoEntity } from './link-page-video.entity';
+import { LinkPageTextEntity } from './link-page-text.entity';
 import { LinkPageLinkEntity } from './link-page-link.entity';
 import { LinkPageSocialLinkEntity } from './link-page-social-link.entity';
 
@@ -237,6 +238,9 @@ export class LinkPageEntity {
 
   @OneToMany(() => LinkPageVideoEntity, (video) => video.linkPage)
   videos!: LinkPageVideoEntity[];
+
+  @OneToMany(() => LinkPageTextEntity, (text) => text.linkPage)
+  texts!: LinkPageTextEntity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

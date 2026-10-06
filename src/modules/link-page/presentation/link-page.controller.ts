@@ -22,10 +22,12 @@ import {
   createFormPageDto,
   createLinkPageDto,
   createPostPageDto,
+  formStateDto,
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
   linkPageVideoDto,
+  linkPageTextDto,
   linkPreviewQueryDto,
   reorderContentDto,
   reorderItemsDto,
@@ -36,13 +38,16 @@ import {
   updateLinkPageLinkDto,
   updateLinkPageSocialLinkDto,
   updateLinkPageVideoDto,
+  updateLinkPageTextDto,
   type CreateFormPageDto,
   type CreateLinkPageDto,
   type CreatePostPageDto,
+  type FormStateDto,
   type LinkPageImageDto,
   type LinkPageLinkDto,
   type LinkPageSocialLinkDto,
   type LinkPageVideoDto,
+  type LinkPageTextDto,
   type LinkPreviewQueryDto,
   type ReorderContentDto,
   type ReorderItemsDto,
@@ -53,6 +58,7 @@ import {
   type UpdateLinkPageLinkDto,
   type UpdateLinkPageSocialLinkDto,
   type UpdateLinkPageVideoDto,
+  type UpdateLinkPageTextDto,
 } from '../application/dto/link-page.dto';
 import { LinkPageService } from '../application/link-page.service';
 import { LinkPreviewService } from '../application/link-preview.service';
@@ -147,6 +153,16 @@ export class LinkPageController {
     @Body(new ZodValidationPipe(createFormPageDto)) dto: CreateFormPageDto,
   ) {
     return this.linkPageService.createForm(auth, id, dto);
+  }
+
+  /** Close the form now, or reopen it (new cohort/limit optional). */
+  @Patch(':id/form/state')
+  setFormState(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(formStateDto)) dto: FormStateDto,
+  ) {
+    return this.linkPageService.setFormState(auth, id, dto);
   }
 
   @Get(':id/submissions')
@@ -343,6 +359,35 @@ export class LinkPageController {
     @Param('videoId', new ParseUUIDPipe()) videoId: string,
   ) {
     return this.linkPageService.deleteVideo(auth, id, videoId);
+  }
+
+  @Post(':id/texts')
+  createText(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(linkPageTextDto)) dto: LinkPageTextDto,
+  ) {
+    return this.linkPageService.createText(auth, id, dto);
+  }
+
+  @Patch(':id/texts/:textId')
+  updateText(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('textId', new ParseUUIDPipe()) textId: string,
+    @Body(new ZodValidationPipe(updateLinkPageTextDto))
+    dto: UpdateLinkPageTextDto,
+  ) {
+    return this.linkPageService.updateText(auth, id, textId, dto);
+  }
+
+  @Delete(':id/texts/:textId')
+  deleteText(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('textId', new ParseUUIDPipe()) textId: string,
+  ) {
+    return this.linkPageService.deleteText(auth, id, textId);
   }
 
   @Get(':id/analytics/insights')
