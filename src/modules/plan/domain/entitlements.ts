@@ -58,6 +58,7 @@ export function entitlementsFor(
 
   return {
     planCode: plan.code,
+    freePlan: plan.priceCents === 0,
     maxClientPages: condition?.maxClientPages ?? plan.maxClientPages,
     maxMembers: condition?.maxMembers ?? plan.maxMembers,
     maxForms: condition?.maxForms ?? plan.maxForms,
