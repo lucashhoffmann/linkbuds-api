@@ -5,6 +5,7 @@ import type { PlanEntity } from './entities/plan.entity';
 
 export type AnalyticsTier = 'BASIC' | 'FULL';
 
+/** Plan for new sign-ups and downgrades. Swapping it keeps old free companies on theirs: see docs/monetizacao.md. */
 export const DEFAULT_PLAN_CODE = 'FREE';
 
 export interface Entitlements {

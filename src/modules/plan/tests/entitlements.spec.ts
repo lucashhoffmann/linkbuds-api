@@ -3,6 +3,7 @@ import { assertEntitled, entitlementsFor } from '../domain/entitlements';
 
 const free = {
   code: 'FREE',
+  priceCents: 0,
   maxClientPages: 1,
   analyticsTier: 'BASIC',
   customDomain: true,
@@ -10,6 +11,7 @@ const free = {
 } as never;
 const agency = {
   code: 'AGENCY',
+  priceCents: 18000,
   maxClientPages: 20,
   analyticsTier: 'FULL',
   customDomain: true,
@@ -35,6 +37,7 @@ describe('entitlementsFor', () => {
   it('uses the plan when there is no active condition', () => {
     expect(entitlementsFor({ plan: free }, now)).toEqual({
       planCode: 'FREE',
+      freePlan: true,
       maxClientPages: 1,
       analyticsTier: 'BASIC',
       customDomain: true,
@@ -54,6 +57,7 @@ describe('entitlementsFor', () => {
 
     expect(result).toEqual({
       planCode: 'AGENCY',
+      freePlan: false,
       maxClientPages: 50,
       analyticsTier: 'FULL',
       customDomain: true,
