@@ -43,6 +43,9 @@ export class CompanyConditionEntity {
   @Column({ name: 'max_members', type: 'integer', nullable: true })
   maxMembers!: number | null;
 
+  @Column({ name: 'max_forms', type: 'integer', nullable: true })
+  maxForms!: number | null;
+
   @Column({ name: 'price_cents', type: 'integer', nullable: true })
   priceCents!: number | null;
 

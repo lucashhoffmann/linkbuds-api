@@ -192,6 +192,10 @@ export const ERRORS = {
     status: HttpStatus.FORBIDDEN,
     message: 'Limite de LinkPages do plano atingido',
   },
+  LINK_PAGE_FORM_LIMIT_REACHED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Limite de formulários do plano atingido',
+  },
   LINK_PAGE_SLUG_ALREADY_EXISTS: {
     status: HttpStatus.CONFLICT,
     message: 'Este endereço já está em uso',

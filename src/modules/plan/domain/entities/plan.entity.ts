@@ -41,6 +41,10 @@ export class PlanEntity {
   @Column({ name: 'max_members', type: 'integer' })
   maxMembers!: number;
 
+  /** Form sub-pages across the whole company. */
+  @Column({ name: 'max_forms', type: 'integer', default: 0 })
+  maxForms!: number;
+
   @Column({ name: 'analytics_tier', type: 'varchar', length: 10 })
   analyticsTier!: AnalyticsTier;
 

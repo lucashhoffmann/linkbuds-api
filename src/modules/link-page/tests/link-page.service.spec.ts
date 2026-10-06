@@ -200,6 +200,23 @@ describe('LinkPageService', () => {
     expect(linkPageRepository.save).not.toHaveBeenCalled();
   });
 
+  it('rejects forms beyond the entitled quota', async () => {
+    const { companyRepository, linkPageRepository, service } = createService();
+    companyRepository.findOne.mockResolvedValue({
+      id: auth.companyId,
+      plan: { maxForms: 1 },
+    });
+    linkPageRepository.count.mockResolvedValue(1);
+
+    await expect(
+      service.createForm(auth, 'bio-id', { name: 'Orçamento', slug: 'orcamento' }),
+    ).rejects.toMatchObject({
+      errorCode: ERROR_CODES.LINK_PAGE_FORM_LIMIT_REACHED,
+    });
+
+    expect(linkPageRepository.save).not.toHaveBeenCalled();
+  });
+
   it('does not allow deleting the agency page through the regular CRUD', async () => {
     const { linkPageRepository, service } = createService();
     linkPageRepository.findOne.mockResolvedValue({

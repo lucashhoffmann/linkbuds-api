@@ -11,6 +11,7 @@ export interface Entitlements {
   planCode: string;
   maxClientPages: number;
   maxMembers: number;
+  maxForms: number;
   analyticsTier: AnalyticsTier;
   customDomain: boolean;
   whiteLabel: boolean;
@@ -59,6 +60,7 @@ export function entitlementsFor(
     planCode: plan.code,
     maxClientPages: condition?.maxClientPages ?? plan.maxClientPages,
     maxMembers: condition?.maxMembers ?? plan.maxMembers,
+    maxForms: condition?.maxForms ?? plan.maxForms,
     analyticsTier: condition?.analyticsTier ?? plan.analyticsTier,
     customDomain: condition?.customDomain ?? plan.customDomain,
     whiteLabel: condition?.whiteLabel ?? plan.whiteLabel,

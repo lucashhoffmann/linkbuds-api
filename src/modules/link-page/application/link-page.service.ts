@@ -626,7 +626,10 @@ export class LinkPageService {
     const usedClientPages = await this.linkPageRepository.count({
       where: { companyId: auth.companyId, type: LinkPageType.CLIENT },
     });
-    const { maxClientPages } = entitlementsFor(company);
+    const usedForms = pages.filter(
+      (page) => page.type === LinkPageType.FORM,
+    ).length;
+    const { maxClientPages, maxForms } = entitlementsFor(company);
 
     return {
       items: pages.map(toLinkPageSummary),
@@ -634,6 +637,8 @@ export class LinkPageService {
         usedClientPages,
         maxClientPages,
         remainingClientPages: Math.max(0, maxClientPages - usedClientPages),
+        usedForms,
+        maxForms,
       },
     };
   }
@@ -776,7 +781,19 @@ export class LinkPageService {
   }
 
   /** Form sub-page (/p/:bio/:form): same as a post, plus the default fields. */
-  createForm(auth: AuthPayload, parentId: string, dto: CreateFormPageDto) {
+  async createForm(auth: AuthPayload, parentId: string, dto: CreateFormPageDto) {
+    const [company, usedForms] = await Promise.all([
+      this.getCompany(auth),
+      this.linkPageRepository.count({
+        where: { companyId: auth.companyId, type: LinkPageType.FORM },
+      }),
+    ]);
+
+    // ponytail: count-then-insert without a lock; two parallel creates can pass by one.
+    if (usedForms >= entitlementsFor(company).maxForms) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_FORM_LIMIT_REACHED);
+    }
+
     return this.createSubPage(auth, parentId, {
       type: LinkPageType.FORM,
       name: dto.name,
