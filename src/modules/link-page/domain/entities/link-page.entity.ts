@@ -12,11 +12,15 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { LinkPageBackgroundType } from '../enums/link-page-background-type.enum';
-import { LinkPageFooterMode } from '../enums/link-page-footer-mode.enum';
+import {
+  LinkPageFooterMode,
+  LinkPageFooterStyle,
+} from '../enums/link-page-footer-mode.enum';
 import { LinkPageLayout } from '../enums/link-page-layout.enum';
 import { LinkPageStatus } from '../enums/link-page-status.enum';
 import { LinkPageType } from '../enums/link-page-type.enum';
 import { LinkPageImageEntity } from './link-page-image.entity';
+import { LinkPageVideoEntity } from './link-page-video.entity';
 import { LinkPageLinkEntity } from './link-page-link.entity';
 import { LinkPageSocialLinkEntity } from './link-page-social-link.entity';
 
@@ -88,6 +92,63 @@ export class LinkPageEntity {
   })
   backgroundColor!: string;
 
+  @Column({
+    name: 'background_gradient_color',
+    type: 'varchar',
+    length: 7,
+    nullable: false,
+    default: '#FFFFFF',
+  })
+  backgroundGradientColor!: string;
+
+  @Column({ name: 'title_bold', type: 'boolean', default: true })
+  titleBold!: boolean;
+
+  @Column({ name: 'subtitle_bold', type: 'boolean', default: false })
+  subtitleBold!: boolean;
+
+  @Column({ name: 'footer_bold', type: 'boolean', default: false })
+  footerBold!: boolean;
+
+  @Column({ name: 'title_color', type: 'varchar', length: 7, nullable: true })
+  titleColor!: string | null;
+
+  @Column({
+    name: 'subtitle_color',
+    type: 'varchar',
+    length: 7,
+    nullable: true,
+  })
+  subtitleColor!: string | null;
+
+  @Column({ name: 'footer_color', type: 'varchar', length: 7, nullable: true })
+  footerColor!: string | null;
+
+  /** CUSTOM footer shape; background/border apply to PILL and BOX. */
+  @Column({
+    name: 'footer_style',
+    type: 'varchar',
+    length: 10,
+    default: 'TEXT',
+  })
+  footerStyle!: LinkPageFooterStyle;
+
+  @Column({
+    name: 'footer_background_color',
+    type: 'varchar',
+    length: 7,
+    nullable: true,
+  })
+  footerBackgroundColor!: string | null;
+
+  @Column({
+    name: 'footer_border_color',
+    type: 'varchar',
+    length: 7,
+    nullable: true,
+  })
+  footerBorderColor!: string | null;
+
   @Column({ name: 'background_image_url', type: 'text', nullable: true })
   backgroundImageUrl!: string | null;
 
@@ -147,6 +208,9 @@ export class LinkPageEntity {
 
   @OneToMany(() => LinkPageImageEntity, (image) => image.linkPage)
   images!: LinkPageImageEntity[];
+
+  @OneToMany(() => LinkPageVideoEntity, (video) => video.linkPage)
+  videos!: LinkPageVideoEntity[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

@@ -2,6 +2,7 @@ import {
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
+  linkPageVideoDto,
   updateLinkPageDto,
   updateLinkPageImageDto,
   updateLinkPageLinkDto,
@@ -95,5 +96,27 @@ describe('LinkPage DTOs', () => {
     expect(
       updateLinkPageDto.safeParse({ ga4MeasurementId: 'UA-12345-1' }).success,
     ).toBe(false);
+  });
+
+  it('accepts only YouTube, Vimeo or direct video file URLs', () => {
+    const accepted = [
+      'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      'https://youtu.be/dQw4w9WgXcQ',
+      'https://youtube.com/shorts/dQw4w9WgXcQ',
+      'https://vimeo.com/76979871',
+      'https://cdn.example.com/promo.mp4',
+    ];
+    const rejected = [
+      'https://example.com/pagina',
+      'https://www.youtube.com/@canal',
+      'javascript:alert(1)',
+    ];
+
+    for (const url of accepted) {
+      expect(linkPageVideoDto.safeParse({ url }).success).toBe(true);
+    }
+    for (const url of rejected) {
+      expect(linkPageVideoDto.safeParse({ url }).success).toBe(false);
+    }
   });
 });

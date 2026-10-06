@@ -11,6 +11,7 @@ import {
 import { LinkPageContactType } from '../enums/link-page-contact-type.enum';
 import { LinkPageLinkKind } from '../enums/link-page-link-kind.enum';
 import { LinkPageLinkPlacement } from '../enums/link-page-link-placement.enum';
+import { LinkPageMediaSize } from '../enums/link-page-media-size.enum';
 import { LinkPageEntity } from './link-page.entity';
 
 @Entity({ name: 'link_page_links' })
@@ -61,6 +62,18 @@ export class LinkPageLinkEntity {
     nullable: true,
   })
   previewDescription!: string | null;
+
+  /** Image height of a PREVIEW card. */
+  @Column({
+    name: 'display_size',
+    type: 'varchar',
+    length: 10,
+    default: LinkPageMediaSize.MEDIUM,
+  })
+  displaySize!: LinkPageMediaSize;
+
+  @Column({ name: 'custom_height', type: 'integer', nullable: true })
+  customHeight!: number | null;
 
   @Column({ name: 'text_color', type: 'varchar', length: 7, nullable: false })
   textColor!: string;

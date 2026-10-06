@@ -18,12 +18,17 @@ import { AppException } from 'src/shared/errors/app.exception';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { LinkPageAnalyticsEventEntity } from '../domain/entities/link-page-analytics-event.entity';
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
+import { LinkPageVideoEntity } from '../domain/entities/link-page-video.entity';
+import { LinkPageMediaSize } from '../domain/enums/link-page-media-size.enum';
 import { LinkPageLinkEntity } from '../domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from '../domain/entities/link-page-social-link.entity';
 import { LinkPageEntity } from '../domain/entities/link-page.entity';
 import { AnalyticsEventType } from '../domain/enums/analytics-event-type.enum';
 import { AnalyticsTargetType } from '../domain/enums/analytics-target-type.enum';
-import { LinkPageFooterMode } from '../domain/enums/link-page-footer-mode.enum';
+import {
+  LinkPageFooterMode,
+  LinkPageFooterStyle,
+} from '../domain/enums/link-page-footer-mode.enum';
 import { LinkPageLinkKind } from '../domain/enums/link-page-link-kind.enum';
 import { LinkPageLinkPlacement } from '../domain/enums/link-page-link-placement.enum';
 import { LinkPageStatus } from '../domain/enums/link-page-status.enum';
@@ -34,19 +39,23 @@ import {
   CreateLinkPageDto,
   CreatePostPageDto,
   LinkPageImageDto,
+  LinkPageVideoDto,
   LinkPageLinkDto,
   LinkPageSocialLinkDto,
+  ReorderContentDto,
   ReorderItemsDto,
   UpdateFooterDefaultDto,
   UpdateFooterDto,
   UpdateLinkPageDto,
   UpdateLinkPageImageDto,
+  UpdateLinkPageVideoDto,
   UpdateLinkPageLinkDto,
   UpdateLinkPageSocialLinkDto,
 } from './dto/link-page.dto';
 import { LinkPagePresenceService } from './link-page-presence.service';
 import {
   toImageResponse,
+  toVideoResponse,
   toLinkPageDetail,
   toLinkPageLinkResponse,
   toLinkPageSummary,
@@ -59,9 +68,28 @@ function pickFooter(source: {
   footerText: string | null;
   footerUrl: string | null;
   footerLogoUrl: string | null;
+  footerStyle: LinkPageFooterStyle;
+  footerBackgroundColor: string | null;
+  footerBorderColor: string | null;
 }) {
-  const { footerMode, footerText, footerUrl, footerLogoUrl } = source;
-  return { footerMode, footerText, footerUrl, footerLogoUrl };
+  const {
+    footerMode,
+    footerText,
+    footerUrl,
+    footerLogoUrl,
+    footerStyle,
+    footerBackgroundColor,
+    footerBorderColor,
+  } = source;
+  return {
+    footerMode,
+    footerText,
+    footerUrl,
+    footerLogoUrl,
+    footerStyle,
+    footerBackgroundColor,
+    footerBorderColor,
+  };
 }
 
 type AnalyticsRange = {
@@ -93,6 +121,16 @@ type PublicLinkPageResponse = {
   backgroundType: LinkPageEntity['backgroundType'];
   backgroundColor: string;
   backgroundImageUrl: string | null;
+  titleColor: string | null;
+  subtitleColor: string | null;
+  footerColor: string | null;
+  backgroundGradientColor: string;
+  titleBold: boolean;
+  subtitleBold: boolean;
+  footerBold: boolean;
+  footerStyle: LinkPageEntity['footerStyle'];
+  footerBackgroundColor: string | null;
+  footerBorderColor: string | null;
   avatarUrl: string | null;
   title: string;
   subtitle: string | null;
@@ -103,6 +141,7 @@ type PublicLinkPageResponse = {
   links: ReturnType<typeof toLinkPageLinkResponse>[];
   socialLinks: ReturnType<typeof toSocialLinkResponse>[];
   images: ReturnType<typeof toImageResponse>[];
+  videos: ReturnType<typeof toVideoResponse>[];
 };
 
 const basicAnalyticsRangeDays = 7;
@@ -225,6 +264,8 @@ export class LinkPageService {
     private readonly socialLinkRepository: Repository<LinkPageSocialLinkEntity>,
     @InjectRepository(LinkPageImageEntity)
     private readonly imageRepository: Repository<LinkPageImageEntity>,
+    @InjectRepository(LinkPageVideoEntity)
+    private readonly videoRepository: Repository<LinkPageVideoEntity>,
     @InjectRepository(LinkPageAnalyticsEventEntity)
     private readonly analyticsRepository: Repository<LinkPageAnalyticsEventEntity>,
     @Optional()
@@ -317,6 +358,10 @@ export class LinkPageService {
       where: { linkPageId: id },
       order: { sortOrder: 'ASC', createdAt: 'ASC' },
     });
+    page.videos = await this.videoRepository.find({
+      where: { linkPageId: id },
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
+    });
 
     return page;
   }
@@ -329,15 +374,34 @@ export class LinkPageService {
     contactValue?: string | null;
     previewImageUrl?: string | null;
     previewDescription?: string | null;
+    displaySize?: LinkPageMediaSize;
+    customHeight?: number | null;
   }) {
     if (!isValidLinkConfiguration(link)) {
       throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION);
     }
 
+    this.assertMediaSize(link.displaySize, link);
+
     // Preview fields only mean something on PREVIEW (kind switches leave them behind).
     if (link.kind !== LinkPageLinkKind.PREVIEW) {
       link.previewImageUrl = null;
       link.previewDescription = null;
+    }
+  }
+
+  /** CUSTOM needs a height; other sizes drop it (same rule as the DB CHECK). */
+  private assertMediaSize(
+    size: LinkPageMediaSize | undefined,
+    target: { customHeight?: number | null },
+  ) {
+    if (size !== LinkPageMediaSize.CUSTOM) {
+      target.customHeight = null;
+      return;
+    }
+
+    if (!target.customHeight) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION);
     }
   }
 
@@ -690,6 +754,16 @@ export class LinkPageService {
       backgroundType: parent.backgroundType,
       backgroundColor: parent.backgroundColor,
       backgroundImageUrl: parent.backgroundImageUrl,
+      titleColor: parent.titleColor,
+      subtitleColor: parent.subtitleColor,
+      footerColor: parent.footerColor,
+      backgroundGradientColor: parent.backgroundGradientColor,
+      titleBold: parent.titleBold,
+      subtitleBold: parent.subtitleBold,
+      footerBold: parent.footerBold,
+      footerStyle: parent.footerStyle,
+      footerBackgroundColor: parent.footerBackgroundColor,
+      footerBorderColor: parent.footerBorderColor,
       avatarUrl: parent.avatarUrl,
       footerMode: parent.footerMode,
       footerText: parent.footerText,
@@ -749,6 +823,9 @@ export class LinkPageService {
       footerText: dto.footerText ?? null,
       footerUrl: dto.footerUrl ?? null,
       footerLogoUrl: dto.footerLogoUrl ?? null,
+      footerStyle: dto.footerStyle,
+      footerBackgroundColor: dto.footerBackgroundColor,
+      footerBorderColor: dto.footerBorderColor,
     };
 
     await this.companyRepository.update(company.id, footer);
@@ -782,6 +859,7 @@ export class LinkPageService {
         contactValue: dto.contactValue ?? null,
         previewImageUrl: dto.previewImageUrl ?? null,
         previewDescription: dto.previewDescription ?? null,
+        customHeight: dto.customHeight ?? null,
       }),
     );
 
@@ -859,6 +937,55 @@ export class LinkPageService {
     await this.invalidatePublicPageCache(page);
 
     return { message: 'Links reordenados com sucesso' };
+  }
+
+  async reorderContent(
+    auth: AuthPayload,
+    linkPageId: string,
+    dto: ReorderContentDto,
+  ) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const idsOf = (type: ReorderContentDto[number]['type']) =>
+      dto.filter((item) => item.type === type).map((item) => item.id);
+    const [links, images, videos] = await Promise.all([
+      this.linkRepository.find({
+        where: { id: In(idsOf('LINK')), linkPageId },
+      }),
+      this.imageRepository.find({
+        where: { id: In(idsOf('IMAGE')), linkPageId },
+      }),
+      this.videoRepository.find({
+        where: { id: In(idsOf('VIDEO')), linkPageId },
+      }),
+    ]);
+
+    if (links.length + images.length + videos.length !== dto.length) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+    }
+
+    const sortOrderByKey = new Map(
+      dto.map((item) => [`${item.type}:${item.id}`, item.sortOrder]),
+    );
+    const withOrder = <T extends { id: string; sortOrder: number }>(
+      type: string,
+      items: T[],
+    ) =>
+      items.map((item) => {
+        item.sortOrder =
+          sortOrderByKey.get(`${type}:${item.id}`) ?? item.sortOrder;
+        return item;
+      });
+
+    // ponytail: three saves without a transaction, like the other reorders; the next drag rewrites every position anyway.
+    await Promise.all([
+      this.linkRepository.save(withOrder('LINK', links)),
+      this.imageRepository.save(withOrder('IMAGE', images)),
+      this.videoRepository.save(withOrder('VIDEO', videos)),
+    ]);
+
+    await this.invalidatePublicPageCache(page);
+
+    return { message: 'Conteúdo reordenado com sucesso' };
   }
 
   async createSocialLink(
@@ -1037,6 +1164,68 @@ export class LinkPageService {
     await this.invalidatePublicPageCache(page);
 
     return { message: 'Imagens reordenadas com sucesso' };
+  }
+
+  async createVideo(
+    auth: AuthPayload,
+    linkPageId: string,
+    dto: LinkPageVideoDto,
+  ) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const video = this.videoRepository.create({
+      ...dto,
+      linkPageId,
+      title: dto.title ?? null,
+      customHeight: dto.customHeight ?? null,
+    });
+    this.assertMediaSize(video.size, video);
+
+    const response = toVideoResponse(await this.videoRepository.save(video));
+
+    await this.invalidatePublicPageCache(page);
+
+    return response;
+  }
+
+  async updateVideo(
+    auth: AuthPayload,
+    linkPageId: string,
+    videoId: string,
+    dto: UpdateLinkPageVideoDto,
+  ) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const video = await this.videoRepository.findOne({
+      where: { id: videoId, linkPageId },
+    });
+
+    if (!video) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+    }
+
+    Object.assign(video, dto);
+    this.assertMediaSize(video.size, video);
+
+    const response = toVideoResponse(await this.videoRepository.save(video));
+
+    await this.invalidatePublicPageCache(page);
+
+    return response;
+  }
+
+  async deleteVideo(auth: AuthPayload, linkPageId: string, videoId: string) {
+    const page = await this.getPageForCompany(auth.companyId, linkPageId);
+    const result = await this.videoRepository.softDelete({
+      id: videoId,
+      linkPageId,
+    });
+
+    if (!result.affected) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+    }
+
+    await this.invalidatePublicPageCache(page);
+
+    return { message: 'Vídeo removido com sucesso' };
   }
 
   async recordPublicEvent(
@@ -1514,7 +1703,7 @@ export class LinkPageService {
       throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
-    const [links, socialLinks, images] = await Promise.all([
+    const [links, socialLinks, images, videos] = await Promise.all([
       this.linkRepository.find({
         where: { active: true, deletedAt: IsNull(), linkPageId: page.id },
         order: { placement: 'ASC', sortOrder: 'ASC', createdAt: 'ASC' },
@@ -1524,6 +1713,10 @@ export class LinkPageService {
         order: { sortOrder: 'ASC', createdAt: 'ASC' },
       }),
       this.imageRepository.find({
+        where: { active: true, deletedAt: IsNull(), linkPageId: page.id },
+        order: { sortOrder: 'ASC', createdAt: 'ASC' },
+      }),
+      this.videoRepository.find({
         where: { active: true, deletedAt: IsNull(), linkPageId: page.id },
         order: { sortOrder: 'ASC', createdAt: 'ASC' },
       }),
@@ -1537,6 +1730,7 @@ export class LinkPageService {
     );
     page.socialLinks = socialLinks;
     page.images = images;
+    page.videos = videos;
 
     const detail = toLinkPageDetail(page);
     const response: PublicLinkPageResponse = {
@@ -1548,6 +1742,16 @@ export class LinkPageService {
       backgroundType: detail.backgroundType,
       backgroundColor: detail.backgroundColor,
       backgroundImageUrl: detail.backgroundImageUrl,
+      titleColor: detail.titleColor,
+      subtitleColor: detail.subtitleColor,
+      footerColor: detail.footerColor,
+      backgroundGradientColor: detail.backgroundGradientColor,
+      titleBold: detail.titleBold,
+      subtitleBold: detail.subtitleBold,
+      footerBold: detail.footerBold,
+      footerStyle: detail.footerStyle,
+      footerBackgroundColor: detail.footerBackgroundColor,
+      footerBorderColor: detail.footerBorderColor,
       avatarUrl: detail.avatarUrl,
       title: detail.title,
       subtitle: detail.subtitle,
@@ -1563,6 +1767,7 @@ export class LinkPageService {
       links: detail.links,
       socialLinks: detail.socialLinks,
       images: detail.images,
+      videos: detail.videos,
     };
 
     await this.publicCache?.set(normalizedHostname, cachePath, response);

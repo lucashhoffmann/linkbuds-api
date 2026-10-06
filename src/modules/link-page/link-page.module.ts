@@ -9,6 +9,7 @@ import { LinkPagePresenceService } from './application/link-page-presence.servic
 import { PublicLinkPageCacheService } from './application/public-link-page-cache.service';
 import { LinkPageAnalyticsEventEntity } from './domain/entities/link-page-analytics-event.entity';
 import { LinkPageImageEntity } from './domain/entities/link-page-image.entity';
+import { LinkPageVideoEntity } from './domain/entities/link-page-video.entity';
 import { LinkPageEntity } from './domain/entities/link-page.entity';
 import { LinkPageLinkEntity } from './domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from './domain/entities/link-page-social-link.entity';
@@ -24,6 +25,7 @@ import { PublicLinkPageController } from './presentation/public-link-page.contro
       LinkPageLinkEntity,
       LinkPageSocialLinkEntity,
       LinkPageImageEntity,
+      LinkPageVideoEntity,
       LinkPageAnalyticsEventEntity,
     ]),
   ],

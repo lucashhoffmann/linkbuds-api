@@ -24,7 +24,9 @@ import {
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
+  linkPageVideoDto,
   linkPreviewQueryDto,
+  reorderContentDto,
   reorderItemsDto,
   updateFooterDefaultDto,
   updateFooterDto,
@@ -32,12 +34,15 @@ import {
   updateLinkPageImageDto,
   updateLinkPageLinkDto,
   updateLinkPageSocialLinkDto,
+  updateLinkPageVideoDto,
   type CreateLinkPageDto,
   type CreatePostPageDto,
   type LinkPageImageDto,
   type LinkPageLinkDto,
   type LinkPageSocialLinkDto,
+  type LinkPageVideoDto,
   type LinkPreviewQueryDto,
+  type ReorderContentDto,
   type ReorderItemsDto,
   type UpdateFooterDefaultDto,
   type UpdateFooterDto,
@@ -45,6 +50,7 @@ import {
   type UpdateLinkPageImageDto,
   type UpdateLinkPageLinkDto,
   type UpdateLinkPageSocialLinkDto,
+  type UpdateLinkPageVideoDto,
 } from '../application/dto/link-page.dto';
 import { LinkPageService } from '../application/link-page.service';
 import { LinkPreviewService } from '../application/link-preview.service';
@@ -158,6 +164,15 @@ export class LinkPageController {
     return this.linkPageService.createLink(auth, id, dto);
   }
 
+  @Patch(':id/content/reorder')
+  reorderContent(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(reorderContentDto)) dto: ReorderContentDto,
+  ) {
+    return this.linkPageService.reorderContent(auth, id, dto);
+  }
+
   @Patch(':id/links/reorder')
   reorderLinks(
     @GetAuth() auth: AuthPayload,
@@ -262,6 +277,35 @@ export class LinkPageController {
     @Param('imageId', new ParseUUIDPipe()) imageId: string,
   ) {
     return this.linkPageService.deleteImage(auth, id, imageId);
+  }
+
+  @Post(':id/videos')
+  createVideo(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(linkPageVideoDto)) dto: LinkPageVideoDto,
+  ) {
+    return this.linkPageService.createVideo(auth, id, dto);
+  }
+
+  @Patch(':id/videos/:videoId')
+  updateVideo(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('videoId', new ParseUUIDPipe()) videoId: string,
+    @Body(new ZodValidationPipe(updateLinkPageVideoDto))
+    dto: UpdateLinkPageVideoDto,
+  ) {
+    return this.linkPageService.updateVideo(auth, id, videoId, dto);
+  }
+
+  @Delete(':id/videos/:videoId')
+  deleteVideo(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('videoId', new ParseUUIDPipe()) videoId: string,
+  ) {
+    return this.linkPageService.deleteVideo(auth, id, videoId);
   }
 
   @Get(':id/analytics/insights')

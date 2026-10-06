@@ -1,6 +1,7 @@
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
 import { LinkPageLinkEntity } from '../domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from '../domain/entities/link-page-social-link.entity';
+import { LinkPageVideoEntity } from '../domain/entities/link-page-video.entity';
 import { LinkPageEntity } from '../domain/entities/link-page.entity';
 
 export function toLinkPageSummary(page: LinkPageEntity) {
@@ -37,6 +38,8 @@ export function toLinkPageLinkResponse(link: LinkPageLinkEntity) {
     contactValue: link.contactValue,
     previewImageUrl: link.previewImageUrl,
     previewDescription: link.previewDescription,
+    displaySize: link.displaySize,
+    customHeight: link.customHeight,
     textColor: link.textColor,
     backgroundColor: link.backgroundColor,
     borderColor: link.borderColor,
@@ -67,12 +70,36 @@ export function toImageResponse(image: LinkPageImageEntity) {
   };
 }
 
+export function toVideoResponse(video: LinkPageVideoEntity) {
+  return {
+    id: video.id,
+    url: video.url,
+    title: video.title,
+    autoplay: video.autoplay,
+    controls: video.controls,
+    size: video.size,
+    customHeight: video.customHeight,
+    sortOrder: video.sortOrder,
+    active: video.active,
+  };
+}
+
 export function toLinkPageDetail(page: LinkPageEntity) {
   return {
     ...toLinkPageSummary(page),
     backgroundType: page.backgroundType,
     backgroundColor: page.backgroundColor,
     backgroundImageUrl: page.backgroundImageUrl,
+    titleColor: page.titleColor,
+    subtitleColor: page.subtitleColor,
+    footerColor: page.footerColor,
+    backgroundGradientColor: page.backgroundGradientColor,
+    titleBold: page.titleBold,
+    subtitleBold: page.subtitleBold,
+    footerBold: page.footerBold,
+    footerStyle: page.footerStyle,
+    footerBackgroundColor: page.footerBackgroundColor,
+    footerBorderColor: page.footerBorderColor,
     avatarUrl: page.avatarUrl,
     footerMode: page.footerMode,
     footerText: page.footerText,
@@ -83,5 +110,6 @@ export function toLinkPageDetail(page: LinkPageEntity) {
     links: (page.links ?? []).map(toLinkPageLinkResponse),
     socialLinks: (page.socialLinks ?? []).map(toSocialLinkResponse),
     images: (page.images ?? []).map(toImageResponse),
+    videos: (page.videos ?? []).map(toVideoResponse),
   };
 }

@@ -3,13 +3,18 @@ import { AnalyticsEventType } from '../../domain/enums/analytics-event-type.enum
 import { AnalyticsTargetType } from '../../domain/enums/analytics-target-type.enum';
 import { LinkPageBackgroundType } from '../../domain/enums/link-page-background-type.enum';
 import { LinkPageContactType } from '../../domain/enums/link-page-contact-type.enum';
-import { LinkPageFooterMode } from '../../domain/enums/link-page-footer-mode.enum';
+import {
+  LinkPageFooterMode,
+  LinkPageFooterStyle,
+} from '../../domain/enums/link-page-footer-mode.enum';
 import { LinkPageLayout } from '../../domain/enums/link-page-layout.enum';
 import { LinkPageLinkKind } from '../../domain/enums/link-page-link-kind.enum';
 import { LinkPageLinkPlacement } from '../../domain/enums/link-page-link-placement.enum';
+import { LinkPageMediaSize } from '../../domain/enums/link-page-media-size.enum';
 import { LinkPageStatus } from '../../domain/enums/link-page-status.enum';
 import { SocialPlatform } from '../../domain/enums/social-platform.enum';
 import { isValidLinkConfiguration } from '../../domain/link-configuration';
+import { isSupportedVideoUrl } from '../../domain/video-url';
 
 const slugSchema = z
   .string()
@@ -99,6 +104,16 @@ export const updateLinkPageDto = z
     backgroundType: z.enum(LinkPageBackgroundType).optional(),
     backgroundColor: colorSchema.optional(),
     backgroundImageUrl: nullableUrlSchema,
+    titleColor: colorSchema.nullable().optional(),
+    subtitleColor: colorSchema.nullable().optional(),
+    footerColor: colorSchema.nullable().optional(),
+    backgroundGradientColor: colorSchema.optional(),
+    titleBold: z.boolean().optional(),
+    subtitleBold: z.boolean().optional(),
+    footerBold: z.boolean().optional(),
+    footerStyle: z.enum(LinkPageFooterStyle).optional(),
+    footerBackgroundColor: colorSchema.nullable().optional(),
+    footerBorderColor: colorSchema.nullable().optional(),
     avatarUrl: nullableUrlSchema,
     title: z.string().trim().min(1).max(140).optional(),
     subtitle: optionalText(500),
@@ -120,6 +135,9 @@ export const updateFooterDto = z.object({
 
 /** Company default footer; `applyToExisting` also overwrites every page. */
 export const updateFooterDefaultDto = updateFooterDto.extend({
+  footerStyle: z.enum(LinkPageFooterStyle).default(LinkPageFooterStyle.TEXT),
+  footerBackgroundColor: colorSchema.nullable().default(null),
+  footerBorderColor: colorSchema.nullable().default(null),
   applyToExisting: z.boolean().default(false),
 });
 
@@ -142,6 +160,14 @@ function partialUpdateDto<S extends z.ZodRawShape>(schema: z.ZodObject<S>) {
     .refine((data) => Object.keys(data).length > 0);
 }
 
+const customHeightSchema = z
+  .number()
+  .int()
+  .min(80)
+  .max(800)
+  .nullable()
+  .optional();
+
 const linkPageLinkBaseDto = z.object({
   placement: z.enum(LinkPageLinkPlacement),
   kind: z.enum(LinkPageLinkKind),
@@ -151,6 +177,8 @@ const linkPageLinkBaseDto = z.object({
   contactValue: optionalText(180),
   previewImageUrl: httpUrlSchema.nullable().optional(),
   previewDescription: optionalText(300),
+  displaySize: z.enum(LinkPageMediaSize).default(LinkPageMediaSize.MEDIUM),
+  customHeight: customHeightSchema,
   textColor: colorSchema.default('#111827'),
   backgroundColor: colorSchema.default('#FFFFFF'),
   borderColor: colorSchema.default('#E5E7EB'),
@@ -186,8 +214,30 @@ export const linkPageImageDto = z.object({
 
 export const updateLinkPageImageDto = partialUpdateDto(linkPageImageDto);
 
+export const linkPageVideoDto = z.object({
+  url: httpUrlSchema.refine(isSupportedVideoUrl),
+  title: optionalText(120),
+  autoplay: z.boolean().default(false),
+  controls: z.boolean().default(true),
+  size: z.enum(LinkPageMediaSize).default(LinkPageMediaSize.MEDIUM),
+  customHeight: customHeightSchema,
+  sortOrder: z.number().int().min(0).default(0),
+  active: z.boolean().default(true),
+});
+
+export const updateLinkPageVideoDto = partialUpdateDto(linkPageVideoDto);
+
 export const reorderItemsDto = z.array(
   z.object({
+    id: z.string().uuid(),
+    sortOrder: z.number().int().min(0),
+  }),
+);
+
+/** One shared order for links, images and videos (the page renders them interleaved). */
+export const reorderContentDto = z.array(
+  z.object({
+    type: z.enum(['LINK', 'IMAGE', 'VIDEO']),
     id: z.string().uuid(),
     sortOrder: z.number().int().min(0),
   }),
@@ -230,7 +280,10 @@ export type UpdateLinkPageSocialLinkDto = z.infer<
 >;
 export type LinkPageImageDto = z.infer<typeof linkPageImageDto>;
 export type UpdateLinkPageImageDto = z.infer<typeof updateLinkPageImageDto>;
+export type LinkPageVideoDto = z.infer<typeof linkPageVideoDto>;
+export type UpdateLinkPageVideoDto = z.infer<typeof updateLinkPageVideoDto>;
 export type ReorderItemsDto = z.infer<typeof reorderItemsDto>;
+export type ReorderContentDto = z.infer<typeof reorderContentDto>;
 export type AnalyticsEventDto = z.infer<typeof analyticsEventDto>;
 export type AnalyticsPresenceDto = z.infer<typeof analyticsPresenceDto>;
 

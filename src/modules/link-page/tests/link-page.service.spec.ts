@@ -3,7 +3,11 @@ import { CompanyEntity } from 'src/modules/company/domain/entities/company.entit
 import { ERROR_CODES } from 'src/shared/errors/error-catalog';
 import { AnalyticsEventType } from '../domain/enums/analytics-event-type.enum';
 import { AnalyticsTargetType } from '../domain/enums/analytics-target-type.enum';
-import { LinkPageFooterMode } from '../domain/enums/link-page-footer-mode.enum';
+import {
+  LinkPageFooterMode,
+  LinkPageFooterStyle,
+} from '../domain/enums/link-page-footer-mode.enum';
+import { LinkPageMediaSize } from '../domain/enums/link-page-media-size.enum';
 import { LinkPageLinkKind } from '../domain/enums/link-page-link-kind.enum';
 import { LinkPageLinkPlacement } from '../domain/enums/link-page-link-placement.enum';
 import { LinkPageLayout } from '../domain/enums/link-page-layout.enum';
@@ -66,6 +70,7 @@ function createService(options?: {
   const linkPageRepository = createRepositoryMock();
   const socialLinkRepository = createRepositoryMock();
   const imageRepository = createRepositoryMock();
+  const videoRepository = createRepositoryMock();
   const analyticsRepository =
     options?.analyticsRepository ?? createRepositoryMock();
   const publicCache = {
@@ -93,6 +98,7 @@ function createService(options?: {
     linkRepository as never,
     socialLinkRepository as never,
     imageRepository as never,
+    videoRepository as never,
     analyticsRepository as never,
     options?.presenceService as never,
     publicCache as never,
@@ -104,6 +110,7 @@ function createService(options?: {
     dataSource,
     domainRepository,
     imageRepository,
+    videoRepository,
     linkRepository,
     linkPageRepository,
     publicCache,
@@ -283,6 +290,9 @@ describe('LinkPageService', () => {
       footerText: null,
       footerUrl: null,
       footerLogoUrl: null,
+      footerStyle: LinkPageFooterStyle.PILL,
+      footerBackgroundColor: '#000000',
+      footerBorderColor: null,
     };
 
     await service.updateFooterDefault(auth, {
@@ -335,6 +345,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       linkPageRepository as never,
+      createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
@@ -597,6 +608,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
+      createRepositoryMock() as never,
       analyticsRepository as never,
     );
 
@@ -642,6 +654,7 @@ describe('LinkPageService', () => {
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       linkPageRepository as never,
+      createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       createRepositoryMock() as never,
@@ -897,6 +910,7 @@ describe('LinkPageService', () => {
       contactType: null,
       contactValue: null,
       previewDescription: null,
+      displaySize: LinkPageMediaSize.MEDIUM,
       textColor: '#111827',
       backgroundColor: '#FFFFFF',
       borderColor: '#E5E7EB',
@@ -953,5 +967,83 @@ describe('LinkPageService', () => {
       '<loc>https://linkbuds.com/p/cliente-roma/promo-1234</loc>',
     );
     expect(sitemap).not.toContain('orfao');
+  });
+
+  it('requires a height for CUSTOM video size and drops it otherwise', async () => {
+    const { linkPageRepository, service, videoRepository } = createService();
+    linkPageRepository.findOne.mockResolvedValue({
+      id: 'page-id',
+      slug: 'bio',
+    });
+
+    await expect(
+      service.createVideo(auth, 'page-id', {
+        url: 'https://youtu.be/dQw4w9WgXcQ',
+        title: null,
+        autoplay: true,
+        controls: true,
+        size: LinkPageMediaSize.CUSTOM,
+        sortOrder: 0,
+        active: true,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION,
+    });
+
+    const video = await service.createVideo(auth, 'page-id', {
+      url: 'https://youtu.be/dQw4w9WgXcQ',
+      title: null,
+      autoplay: false,
+      controls: true,
+      size: LinkPageMediaSize.LARGE,
+      customHeight: 500,
+      sortOrder: 0,
+      active: true,
+    });
+
+    expect(video.customHeight).toBeNull();
+    expect(videoRepository.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('reorders links, images and videos in one shared order', async () => {
+    const {
+      imageRepository,
+      linkPageRepository,
+      linkRepository,
+      service,
+      videoRepository,
+    } = createService();
+    linkPageRepository.findOne.mockResolvedValue({
+      id: 'page-id',
+      slug: 'bio',
+    });
+    linkRepository.find.mockResolvedValue([{ id: 'link-a', sortOrder: 0 }]);
+    imageRepository.find.mockResolvedValue([{ id: 'image-a', sortOrder: 1 }]);
+    videoRepository.find.mockResolvedValue([{ id: 'video-a', sortOrder: 2 }]);
+
+    await service.reorderContent(auth, 'page-id', [
+      { type: 'VIDEO', id: 'video-a', sortOrder: 0 },
+      { type: 'LINK', id: 'link-a', sortOrder: 1 },
+      { type: 'IMAGE', id: 'image-a', sortOrder: 2 },
+    ]);
+
+    expect(videoRepository.save).toHaveBeenCalledWith([
+      { id: 'video-a', sortOrder: 0 },
+    ]);
+    expect(linkRepository.save).toHaveBeenCalledWith([
+      { id: 'link-a', sortOrder: 1 },
+    ]);
+    expect(imageRepository.save).toHaveBeenCalledWith([
+      { id: 'image-a', sortOrder: 2 },
+    ]);
+
+    videoRepository.find.mockResolvedValue([]);
+    await expect(
+      service.reorderContent(auth, 'page-id', [
+        { type: 'VIDEO', id: 'video-of-other-page', sortOrder: 0 },
+      ]),
+    ).rejects.toMatchObject({
+      errorCode: ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND,
+    });
   });
 });
