@@ -9,6 +9,8 @@ export const DEFAULT_PLAN_CODE = 'FREE';
 
 export interface Entitlements {
   planCode: string;
+  /** Plan costs nothing. Any free plan, not only the current default: older free plans stay with the companies that joined on them. */
+  freePlan: boolean;
   maxClientPages: number;
   maxMembers: number;
   maxForms: number;
