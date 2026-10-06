@@ -1,3 +1,4 @@
+import { SocialPlatform } from '../enums/social-platform.enum';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import {
   Column,
@@ -42,6 +43,20 @@ export class LinkPageEntity {
 
   @Column({ name: 'type', type: 'varchar', length: 20, nullable: false })
   type!: LinkPageType;
+
+  /** Set only for POST pages. */
+  @Column({ name: 'parent_page_id', type: 'uuid', nullable: true })
+  parentPageId!: string | null;
+
+  @ManyToOne(() => LinkPageEntity, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'parent_page_id' })
+  parentPage!: LinkPageEntity | null;
+
+  @Column({ name: 'post_network', type: 'varchar', length: 20, nullable: true })
+  postNetwork!: SocialPlatform | null;
+
+  @Column({ name: 'post_url', type: 'text', nullable: true })
+  postUrl!: string | null;
 
   @Column({ name: 'status', type: 'varchar', length: 20, nullable: false })
   status!: LinkPageStatus;
@@ -90,7 +105,7 @@ export class LinkPageEntity {
     type: 'varchar',
     length: 20,
     nullable: false,
-    default: LinkPageFooterMode.LINKSBUDS,
+    default: LinkPageFooterMode.LINKBUDS,
   })
   footerMode!: LinkPageFooterMode;
 

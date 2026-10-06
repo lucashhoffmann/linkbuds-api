@@ -1,7 +1,9 @@
-import { AppAbilityFactory } from 'src/modules/authorization/application/app-ability.factory';
-import { PlanType } from 'src/modules/plan/domain/enums/plan-type.enum';
-import { ERROR_CODES } from 'src/shared/constants/errors.constants';
-import { CompanyDomainService } from '../application/company-domain.service';
+import { UserRole } from 'src/modules/user/domain/enums/user-role.enum';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
+import {
+  CompanyDomainService,
+  nextDomainStatus,
+} from '../application/company-domain.service';
 import { CompanyDomainStatus } from '../domain/enums/company-domain-status.enum';
 
 function createRepositoryMock() {
@@ -17,11 +19,12 @@ function createService() {
   const companyRepository = createRepositoryMock();
   const domainRepository = createRepositoryMock();
   const verificationService = {
-    verifyCname: jest.fn(),
+    check: jest.fn(),
   };
+  const publicCache = { invalidateHost: jest.fn() };
   const service = new CompanyDomainService(
-    new AppAbilityFactory(),
     verificationService as never,
+    publicCache as never,
     companyRepository as never,
     domainRepository as never,
   );
@@ -29,15 +32,15 @@ function createService() {
   companyRepository.findOne.mockResolvedValue({
     id: 'company-id',
     plan: {
-      type: PlanType.FREE,
-      customDomainEnabled: false,
-      whiteLabelEnabled: false,
+      customDomain: true,
+      whiteLabel: false,
     },
   });
 
   return {
     companyRepository,
     domainRepository,
+    publicCache,
     service,
     verificationService,
   };
@@ -46,6 +49,7 @@ function createService() {
 const auth = {
   id: 'user-id',
   companyId: 'company-id',
+  role: UserRole.OWNER,
 };
 
 describe('CompanyDomainService', () => {
@@ -95,29 +99,90 @@ describe('CompanyDomainService', () => {
       companyId: 'company-id',
       hostname: 'example.com',
       status: CompanyDomainStatus.PENDING,
-      verificationToken: 'linksbuds-token',
+      verificationToken: 'linkbuds-token',
       verifiedAt: null,
       lastCheckedAt: null,
     });
-    verificationService.verifyCname.mockResolvedValue(true);
+    verificationService.check.mockResolvedValue({
+      ownership: true,
+      routing: true,
+    });
 
     await expect(service.verify(auth, 'domain-id')).resolves.toMatchObject({
       hostname: 'example.com',
       status: CompanyDomainStatus.ACTIVE,
+      dnsRecords: [
+        {
+          type: 'TXT',
+          name: '_linkbuds.example.com',
+          value: 'linkbuds-token',
+        },
+        { type: 'CNAME', name: 'example.com' },
+      ],
     });
-    expect(verificationService.verifyCname).toHaveBeenCalledWith('example.com');
+    expect(verificationService.check).toHaveBeenCalledWith(
+      'example.com',
+      'linkbuds-token',
+    );
+  });
+
+  it('moves domains through ownership and routing checks', () => {
+    const { PENDING, VERIFIED, ACTIVE, FAILED } = CompanyDomainStatus;
+    const ok = { ownership: true, routing: true };
+
+    expect(nextDomainStatus(PENDING, { ownership: false, routing: true })).toBe(
+      PENDING,
+    );
+    expect(nextDomainStatus(PENDING, { ownership: true, routing: false })).toBe(
+      VERIFIED,
+    );
+    expect(nextDomainStatus(VERIFIED, ok)).toBe(ACTIVE);
+    expect(nextDomainStatus(ACTIVE, { ownership: true, routing: false })).toBe(
+      VERIFIED,
+    );
+    expect(nextDomainStatus(ACTIVE, { ownership: false, routing: true })).toBe(
+      FAILED,
+    );
+    expect(nextDomainStatus(FAILED, ok)).toBe(ACTIVE);
+  });
+
+  it('drops the public cache when an active domain stops routing', async () => {
+    const { domainRepository, publicCache, service, verificationService } =
+      createService();
+    domainRepository.findOne.mockResolvedValue({
+      id: 'domain-id',
+      companyId: 'company-id',
+      hostname: 'example.com',
+      status: CompanyDomainStatus.ACTIVE,
+      verificationToken: 'linkbuds-token',
+      verifiedAt: new Date(),
+    });
+    verificationService.check.mockResolvedValue({
+      ownership: true,
+      routing: false,
+    });
+
+    await service.verify(auth, 'domain-id');
+
+    expect(publicCache.invalidateHost).toHaveBeenCalledWith('example.com');
   });
 
   it('allows free plans to remove a custom domain', async () => {
-    const { domainRepository, service } = createService();
-    domainRepository.softDelete.mockResolvedValue({ affected: 1 });
+    const { domainRepository, publicCache, service } = createService();
+    domainRepository.findOne.mockResolvedValue({
+      id: 'domain-id',
+      hostname: 'example.com',
+    });
 
     await expect(service.delete(auth, 'domain-id')).resolves.toEqual({
       message: 'Domínio removido com sucesso',
     });
+    expect(domainRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 'domain-id', companyId: 'company-id' },
+    });
     expect(domainRepository.softDelete).toHaveBeenCalledWith({
       id: 'domain-id',
-      companyId: 'company-id',
     });
+    expect(publicCache.invalidateHost).toHaveBeenCalledWith('example.com');
   });
 });

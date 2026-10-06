@@ -7,16 +7,25 @@ export const BETTER_AUTH_BASE_PATH = '/api/auth';
 
 type Env = NodeJS.ProcessEnv;
 
+export type BetterAuthUser = {
+  id: string;
+  name: string;
+  email: string;
+};
+
 type BetterAuthSession = {
-  user: {
-    id: string;
-  };
+  user: BetterAuthUser;
 };
 
 interface BetterAuthInstance {
   handler(request: Request): Promise<Response>;
   api: {
-    getSession(context: { headers: Headers }): Promise<BetterAuthSession | null>;
+    getSession(context: {
+      headers: Headers;
+    }): Promise<BetterAuthSession | null>;
+    signUpEmail(context: {
+      body: { name: string; email: string; password: string };
+    }): Promise<{ user: BetterAuthUser }>;
   };
 }
 
@@ -80,7 +89,7 @@ export function buildBetterAuthOptions(env: Env = process.env) {
   const socialProviders = buildSocialProviders(env);
 
   return {
-    appName: 'Linkbuds',
+    appName: 'LinkBuds',
     basePath: BETTER_AUTH_BASE_PATH,
     baseURL: getEnvOrDefault(
       env,
@@ -98,6 +107,7 @@ export function buildBetterAuthOptions(env: Env = process.env) {
     }),
     emailAndPassword: {
       enabled: true,
+      minPasswordLength: 6,
       password: {
         hash: (password: string) => argon2.hash(password),
         verify: ({ hash, password }: { hash: string; password: string }) =>

@@ -32,10 +32,10 @@ export class CompanyDomainEntity {
   @Column({ name: 'verification_token', length: 160, nullable: false })
   verificationToken!: string;
 
-  @Column({ name: 'verified_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'verified_at', type: 'timestamptz', nullable: true })
   verifiedAt!: Date | null;
 
-  @Column({ name: 'last_checked_at', type: 'timestamp', nullable: true })
+  @Column({ name: 'last_checked_at', type: 'timestamptz', nullable: true })
   lastCheckedAt!: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })

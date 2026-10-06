@@ -64,6 +64,17 @@ export const createLinkPageDto = z.object({
   title: z.string().trim().min(1).max(140).optional(),
 });
 
+/** Sub-page of a bio page for one social post. */
+export const createPostPageDto = z.object({
+  name: z.string().trim().min(1).max(120),
+  slug: slugSchema,
+  title: z.string().trim().min(1).max(140).optional(),
+  postNetwork: z.enum(SocialPlatform).nullable().optional(),
+  postUrl: httpUrlSchema.nullable().optional(),
+});
+
+export type CreatePostPageDto = z.infer<typeof createPostPageDto>;
+
 export const updateLinkPageDto = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
@@ -76,6 +87,9 @@ export const updateLinkPageDto = z
     avatarUrl: nullableUrlSchema,
     title: z.string().trim().min(1).max(140).optional(),
     subtitle: optionalText(500),
+    /** POST pages only. */
+    postNetwork: z.enum(SocialPlatform).nullable().optional(),
+    postUrl: httpUrlSchema.nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0);
 
@@ -85,6 +99,25 @@ export const updateFooterDto = z.object({
   footerUrl: nullableUrlSchema,
   footerLogoUrl: nullableUrlSchema,
 });
+
+type StripDefaults<S extends z.ZodRawShape> = {
+  [K in keyof S]: S[K] extends z.ZodDefault<infer Inner> ? Inner : S[K];
+};
+
+// PATCH must only touch the fields sent: zod 4 still applies .default() under .partial().
+function partialUpdateDto<S extends z.ZodRawShape>(schema: z.ZodObject<S>) {
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).map(([key, field]) => [
+      key,
+      field instanceof z.ZodDefault ? field.unwrap() : field,
+    ]),
+  ) as StripDefaults<S>;
+
+  return z
+    .object(shape)
+    .partial()
+    .refine((data) => Object.keys(data).length > 0);
+}
 
 const linkPageLinkBaseDto = z.object({
   placement: z.enum(LinkPageLinkPlacement),
@@ -113,9 +146,7 @@ export const linkPageLinkDto = linkPageLinkBaseDto.refine(
       Boolean(data.contactValue)),
 );
 
-export const updateLinkPageLinkDto = linkPageLinkBaseDto
-  .partial()
-  .refine((data) => Object.keys(data).length > 0);
+export const updateLinkPageLinkDto = partialUpdateDto(linkPageLinkBaseDto);
 
 export const linkPageSocialLinkDto = z.object({
   platform: z.enum(SocialPlatform),
@@ -124,9 +155,9 @@ export const linkPageSocialLinkDto = z.object({
   active: z.boolean().default(true),
 });
 
-export const updateLinkPageSocialLinkDto = linkPageSocialLinkDto
-  .partial()
-  .refine((data) => Object.keys(data).length > 0);
+export const updateLinkPageSocialLinkDto = partialUpdateDto(
+  linkPageSocialLinkDto,
+);
 
 export const linkPageImageDto = z.object({
   imageUrl: httpUrlSchema,
@@ -136,9 +167,7 @@ export const linkPageImageDto = z.object({
   active: z.boolean().default(true),
 });
 
-export const updateLinkPageImageDto = linkPageImageDto
-  .partial()
-  .refine((data) => Object.keys(data).length > 0);
+export const updateLinkPageImageDto = partialUpdateDto(linkPageImageDto);
 
 export const reorderItemsDto = z.array(
   z.object({

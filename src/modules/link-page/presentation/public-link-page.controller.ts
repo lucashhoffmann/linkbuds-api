@@ -34,6 +34,20 @@ export class PublicLinkPageController {
     );
   }
 
+  // `_` is not allowed in slugs, so this never shadows a page.
+  @Get('_home')
+  @UseInterceptors(TransformResponseInterceptor)
+  @Header('Cache-Control', 'public, max-age=30, stale-while-revalidate=300')
+  resolveDomainHome(
+    @Headers('x-linkbuds-host') requestedHost?: string,
+    @Headers('x-forwarded-host') forwardedHost?: string,
+    @Headers('host') host?: string,
+  ) {
+    return this.linkPageService.resolveDomainHome(
+      requestedHost ?? forwardedHost ?? host,
+    );
+  }
+
   @Get(':slug')
   @UseInterceptors(TransformResponseInterceptor)
   @Header('Cache-Control', 'public, max-age=30, stale-while-revalidate=300')
@@ -46,6 +60,23 @@ export class PublicLinkPageController {
     return this.linkPageService.resolvePublic(
       requestedHost ?? forwardedHost ?? host,
       slug,
+    );
+  }
+
+  @Get(':slug/:postSlug')
+  @UseInterceptors(TransformResponseInterceptor)
+  @Header('Cache-Control', 'public, max-age=30, stale-while-revalidate=300')
+  resolvePost(
+    @Param('slug') slug: string,
+    @Param('postSlug') postSlug: string,
+    @Headers('x-linkbuds-host') requestedHost?: string,
+    @Headers('x-forwarded-host') forwardedHost?: string,
+    @Headers('host') host?: string,
+  ) {
+    return this.linkPageService.resolvePublic(
+      requestedHost ?? forwardedHost ?? host,
+      slug,
+      postSlug,
     );
   }
 

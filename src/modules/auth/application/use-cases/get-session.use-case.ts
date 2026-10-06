@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
+import { toCompanyResponse } from 'src/modules/company/application/company-response.mapper';
+import { ENTITLEMENT_RELATIONS } from 'src/modules/plan/domain/entitlements';
+import { toUserResponse } from 'src/modules/user/application/user-response.mapper';
 import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
-import { toCompanyResponse } from 'src/modules/company/application/use-cases/company-response.mapper';
-import { toUserResponse } from 'src/modules/user/application/use-cases/user-response.mapper';
-import { ERROR_CODES } from 'src/shared/constants/errors.constants';
-import { NotFoundException } from 'src/shared/exceptions/business.exception';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
+import { AppException } from 'src/shared/errors/app.exception';
 import { AuthPayload } from 'src/shared/types/auth-payload.types';
 
 @Injectable()
@@ -14,32 +14,21 @@ export class GetSessionUseCase {
   constructor(
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
-    @InjectRepository(CompanyEntity)
-    private readonly companyRepository: Repository<CompanyEntity>,
   ) {}
 
   async execute(auth: AuthPayload) {
     const user = await this.userRepository.findOne({
-      where: { id: auth.id, company: { id: auth.companyId } },
-      relations: { company: true },
+      where: { id: auth.id, companyId: auth.companyId },
+      relations: { identity: true, company: ENTITLEMENT_RELATIONS },
     });
 
     if (!user) {
-      throw new NotFoundException(ERROR_CODES.USER_NOT_FOUND);
-    }
-
-    const company = await this.companyRepository.findOne({
-      where: { id: auth.companyId },
-      relations: { plan: true },
-    });
-
-    if (!company) {
-      throw new NotFoundException(ERROR_CODES.COMPANY_NOT_FOUND);
+      throw new AppException(ERROR_CODES.USER_NOT_FOUND);
     }
 
     return {
       user: toUserResponse(user),
-      company: toCompanyResponse(company),
+      company: toCompanyResponse(user.company),
     };
   }
 }

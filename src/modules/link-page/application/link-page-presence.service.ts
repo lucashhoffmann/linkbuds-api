@@ -1,49 +1,27 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import Redis from 'ioredis';
+import { Injectable } from '@nestjs/common';
+import { RedisClient, positiveIntFromEnv } from 'src/shared/redis/redis.client';
 
 const defaultOnlineTtlSeconds = 90;
 
-function parsePositiveInteger(value: string | undefined, fallback: number) {
-  const parsed = Number(value);
-
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 @Injectable()
-export class LinkPagePresenceService implements OnModuleDestroy {
-  private readonly redis: Redis;
-  private readonly ttlSeconds = parsePositiveInteger(
+export class LinkPagePresenceService {
+  private readonly ttlSeconds = positiveIntFromEnv(
     process.env.LINK_PAGE_ONLINE_TTL_SECONDS,
     defaultOnlineTtlSeconds,
   );
 
-  constructor() {
-    this.redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
-      lazyConnect: true,
-      maxRetriesPerRequest: 1,
-      retryStrategy: () => null,
-    });
-    this.redis.on('error', () => undefined);
-  }
+  constructor(private readonly client: RedisClient) {}
 
-  async onModuleDestroy() {
-    await this.redis.quit().catch(() => undefined);
+  private get redis() {
+    return this.client.redis;
   }
 
   private key(linkPageId: string) {
     return `linkbuds:link-page-online:${linkPageId}`;
   }
 
-  private async ensureConnected() {
-    if ((this.redis.status as string) === 'ready') {
-      return true;
-    }
-
-    if (this.redis.status === 'wait' || this.redis.status === 'end') {
-      await this.redis.connect().catch(() => undefined);
-    }
-
-    return (this.redis.status as string) === 'ready';
+  private ensureConnected() {
+    return this.client.ensureConnected();
   }
 
   async heartbeat(linkPageId: string, sessionId: string) {

@@ -1,31 +1,26 @@
 import { Injectable } from '@nestjs/common';
+import { normalizeHostname } from 'src/shared/utils/hostname';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'node:crypto';
 import { QueryFailedError, Repository } from 'typeorm';
-import { Action } from 'src/modules/authorization/domain/enums/action.enum';
-import { AuthorizationSubject } from 'src/modules/authorization/domain/enums/authorization-subject.enum';
-import { AppAbilityFactory } from 'src/modules/authorization/application/app-ability.factory';
-import { ERROR_CODES } from 'src/shared/constants/errors.constants';
 import {
-  ConflictException,
-  NotFoundException,
-  ValidationException,
-} from 'src/shared/exceptions/business.exception';
+  ENTITLEMENT_RELATIONS,
+  assertEntitled,
+} from 'src/modules/plan/domain/entitlements';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
+import { AppException } from 'src/shared/errors/app.exception';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { CompanyDomainEntity } from '../domain/entities/company-domain.entity';
 import { CompanyEntity } from '../domain/entities/company.entity';
 import { CompanyDomainStatus } from '../domain/enums/company-domain-status.enum';
 import { getCustomDomainCnameTarget } from './company-domain-cname-target';
 import { CreateCompanyDomainDto } from './dto/company-domain.dto';
-import { DomainVerificationService } from './domain-verification.service';
-
-function normalizeHostname(value: string) {
-  const trimmed = value.trim().toLowerCase();
-  const withoutProtocol = trimmed.replace(/^https?:\/\//, '');
-  const hostname = withoutProtocol.split('/')[0]?.replace(/\.$/, '') ?? '';
-
-  return hostname;
-}
+import { PublicLinkPageCacheService } from 'src/modules/link-page/application/public-link-page-cache.service';
+import {
+  type DomainCheck,
+  DomainVerificationService,
+  VERIFICATION_RECORD_PREFIX,
+} from './domain-verification.service';
 
 function isValidHostname(hostname: string) {
   if (!hostname || hostname.length > 253 || hostname.includes(':')) {
@@ -40,11 +35,7 @@ function isValidHostname(hostname: string) {
 function uniqueConstraintName(error: unknown) {
   if (
     !(error instanceof QueryFailedError) &&
-    !(
-      typeof error === 'object' &&
-      error !== null &&
-      'driverError' in error
-    )
+    !(typeof error === 'object' && error !== null && 'driverError' in error)
   ) {
     return null;
   }
@@ -54,6 +45,25 @@ function uniqueConstraintName(error: unknown) {
       driverError?: { constraint?: string };
     }
   ).driverError?.constraint;
+}
+
+/**
+ * PENDING → VERIFIED (TXT ok) → ACTIVE (TXT + routing ok).
+ * A domain that was proven before and loses the TXT becomes FAILED.
+ */
+export function nextDomainStatus(
+  current: CompanyDomainStatus,
+  check: DomainCheck,
+): CompanyDomainStatus {
+  if (check.ownership) {
+    return check.routing
+      ? CompanyDomainStatus.ACTIVE
+      : CompanyDomainStatus.VERIFIED;
+  }
+
+  return current === CompanyDomainStatus.PENDING
+    ? CompanyDomainStatus.PENDING
+    : CompanyDomainStatus.FAILED;
 }
 
 function toCompanyDomainResponse(domain: CompanyDomainEntity) {
@@ -66,20 +76,29 @@ function toCompanyDomainResponse(domain: CompanyDomainEntity) {
     verificationToken: domain.verificationToken,
     verifiedAt: domain.verifiedAt,
     lastCheckedAt: domain.lastCheckedAt,
-    dnsInstructions: {
-      type: 'CNAME',
-      name: domain.hostname,
-      value: cnameTarget,
-      verificationToken: domain.verificationToken,
-    },
+    // Both records are required: TXT proves ownership, CNAME routes traffic.
+    dnsRecords: [
+      {
+        purpose: 'OWNERSHIP',
+        type: 'TXT',
+        name: `${VERIFICATION_RECORD_PREFIX}.${domain.hostname}`,
+        value: domain.verificationToken,
+      },
+      {
+        purpose: 'ROUTING',
+        type: 'CNAME',
+        name: domain.hostname,
+        value: cnameTarget,
+      },
+    ],
   };
 }
 
 @Injectable()
 export class CompanyDomainService {
   constructor(
-    private readonly abilityFactory: AppAbilityFactory,
     private readonly verificationService: DomainVerificationService,
+    private readonly publicCache: PublicLinkPageCacheService,
     @InjectRepository(CompanyEntity)
     private readonly companyRepository: Repository<CompanyEntity>,
     @InjectRepository(CompanyDomainEntity)
@@ -89,11 +108,11 @@ export class CompanyDomainService {
   private async getCompany(auth: AuthPayload) {
     const company = await this.companyRepository.findOne({
       where: { id: auth.companyId },
-      relations: { plan: true },
+      relations: ENTITLEMENT_RELATIONS,
     });
 
     if (!company) {
-      throw new NotFoundException(ERROR_CODES.COMPANY_NOT_FOUND);
+      throw new AppException(ERROR_CODES.COMPANY_NOT_FOUND);
     }
 
     return company;
@@ -101,13 +120,7 @@ export class CompanyDomainService {
 
   private async assertCanManage(auth: AuthPayload) {
     const company = await this.getCompany(auth);
-    const ability = this.abilityFactory.createForCompany(company);
-    this.abilityFactory.assertCan(
-      ability,
-      Action.ManageCustomDomain,
-      AuthorizationSubject.CompanyDomain,
-      { companyId: company.id },
-    );
+    assertEntitled(company, 'customDomain');
   }
 
   async get(auth: AuthPayload) {
@@ -124,9 +137,7 @@ export class CompanyDomainService {
     const hostname = normalizeHostname(dto.hostname);
 
     if (!isValidHostname(hostname)) {
-      throw new ValidationException(
-        ERROR_CODES.COMPANY_DOMAIN_INVALID_HOSTNAME,
-      );
+      throw new AppException(ERROR_CODES.COMPANY_DOMAIN_INVALID_HOSTNAME);
     }
 
     const [existingCompanyDomain, existingHostname] = await Promise.all([
@@ -135,11 +146,11 @@ export class CompanyDomainService {
     ]);
 
     if (existingCompanyDomain) {
-      throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_LIMIT_REACHED);
+      throw new AppException(ERROR_CODES.COMPANY_DOMAIN_LIMIT_REACHED);
     }
 
     if (existingHostname) {
-      throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_ALREADY_EXISTS);
+      throw new AppException(ERROR_CODES.COMPANY_DOMAIN_ALREADY_EXISTS);
     }
 
     try {
@@ -148,7 +159,7 @@ export class CompanyDomainService {
           companyId: auth.companyId,
           hostname,
           status: CompanyDomainStatus.PENDING,
-          verificationToken: `linksbuds-${randomBytes(18).toString('hex')}`,
+          verificationToken: `linkbuds-${randomBytes(18).toString('hex')}`,
         }),
       );
 
@@ -160,11 +171,11 @@ export class CompanyDomainService {
         constraint === 'UQ_company_domains_hostname' ||
         constraint === 'UQ_company_domains_hostname_active'
       ) {
-        throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_ALREADY_EXISTS);
+        throw new AppException(ERROR_CODES.COMPANY_DOMAIN_ALREADY_EXISTS);
       }
 
       if (constraint === 'UQ_company_domains_company_active') {
-        throw new ConflictException(ERROR_CODES.COMPANY_DOMAIN_LIMIT_REACHED);
+        throw new AppException(ERROR_CODES.COMPANY_DOMAIN_LIMIT_REACHED);
       }
 
       throw error;
@@ -178,19 +189,23 @@ export class CompanyDomainService {
     });
 
     if (!domain) {
-      throw new NotFoundException(ERROR_CODES.COMPANY_DOMAIN_NOT_FOUND);
+      throw new AppException(ERROR_CODES.COMPANY_DOMAIN_NOT_FOUND);
     }
 
-    const verified = await this.verificationService.verifyCname(
+    const check = await this.verificationService.check(
       domain.hostname,
+      domain.verificationToken,
     );
+    const wasActive = domain.status === CompanyDomainStatus.ACTIVE;
+    domain.status = nextDomainStatus(domain.status, check);
     domain.lastCheckedAt = new Date();
 
-    if (verified) {
-      domain.status = CompanyDomainStatus.ACTIVE;
+    if (check.ownership && !domain.verifiedAt) {
       domain.verifiedAt = new Date();
-    } else if (domain.status === CompanyDomainStatus.ACTIVE) {
-      domain.status = CompanyDomainStatus.PENDING;
+    }
+
+    if (wasActive && domain.status !== CompanyDomainStatus.ACTIVE) {
+      await this.publicCache.invalidateHost(domain.hostname);
     }
 
     return toCompanyDomainResponse(await this.domainRepository.save(domain));
@@ -198,14 +213,16 @@ export class CompanyDomainService {
 
   async delete(auth: AuthPayload, id: string) {
     await this.assertCanManage(auth);
-    const result = await this.domainRepository.softDelete({
-      id,
-      companyId: auth.companyId,
+    const domain = await this.domainRepository.findOne({
+      where: { id, companyId: auth.companyId },
     });
 
-    if (!result.affected) {
-      throw new NotFoundException(ERROR_CODES.COMPANY_DOMAIN_NOT_FOUND);
+    if (!domain) {
+      throw new AppException(ERROR_CODES.COMPANY_DOMAIN_NOT_FOUND);
     }
+
+    await this.domainRepository.softDelete({ id });
+    await this.publicCache.invalidateHost(domain.hostname);
 
     return { message: 'Domínio removido com sucesso' };
   }

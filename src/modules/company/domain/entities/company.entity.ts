@@ -1,4 +1,5 @@
 import { LinkPageEntity } from 'src/modules/link-page/domain/entities/link-page.entity';
+import { CompanyConditionEntity } from 'src/modules/plan/domain/entities/company-condition.entity';
 import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
 import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
 import {
@@ -22,27 +23,25 @@ export class CompanyEntity {
   @Column({ name: 'name', length: 120, nullable: false })
   name!: string;
 
-  @Column({ name: 'email', nullable: false, unique: true })
+  /** Billing/contact email; starts as the owner's email. */
+  @Column({ name: 'email', nullable: false })
   email!: string;
 
-  @Column({ name: 'plan_id', type: 'uuid', nullable: true })
-  planId!: string | null;
+  @Column({ name: 'plan_id', type: 'uuid' })
+  planId!: string;
 
-  @ManyToOne(() => PlanEntity, (plan) => plan.companiesUsingPlan, {
-    nullable: true,
-    onDelete: 'SET NULL',
-  })
+  @ManyToOne(() => PlanEntity)
   @JoinColumn({ name: 'plan_id' })
-  plan!: PlanEntity | null;
+  plan!: PlanEntity;
+
+  @OneToMany(() => CompanyConditionEntity, (condition) => condition.company)
+  conditions!: CompanyConditionEntity[];
 
   @OneToMany(() => UserEntity, (user) => user.company)
   users!: UserEntity[];
 
   @OneToMany(() => LinkPageEntity, (linkPage) => linkPage.company)
   linkPages!: LinkPageEntity[];
-
-  @OneToMany(() => PlanEntity, (plan) => plan.company)
-  customPlans!: PlanEntity[];
 
   @OneToMany(() => CompanyDomainEntity, (domain) => domain.company)
   domains!: CompanyDomainEntity[];

@@ -1,25 +1,16 @@
-const defaultCnameTarget = 'linksbuds.com';
+import { normalizeHostname } from 'src/shared/utils/hostname';
 
-function hostnameFromUrl(value: string) {
-  try {
-    return new URL(value).hostname;
-  } catch {
-    return value;
-  }
-}
+// ponytail: placeholder until the official domain is confirmed; set CUSTOM_DOMAIN_CNAME_TARGET in production.
+const defaultCnameTarget = 'linkbuds.com';
 
-function normalizeHostname(value?: string | null) {
-  if (!value) {
-    return null;
-  }
+function publicHostname(value?: string | null) {
+  const hostname = normalizeHostname(value);
 
-  const hostname = hostnameFromUrl(value.trim())
-    .split('/')[0]
-    ?.split(':')[0]
-    ?.toLowerCase()
-    .replace(/\.$/, '');
-
-  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
+  if (
+    !hostname ||
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost')
+  ) {
     return null;
   }
 
@@ -32,8 +23,8 @@ function normalizeHostname(value?: string | null) {
 
 export function getCustomDomainCnameTarget() {
   return (
-    normalizeHostname(process.env.CUSTOM_DOMAIN_CNAME_TARGET) ??
-    normalizeHostname(process.env.PUBLIC_WEB_URL) ??
+    publicHostname(process.env.CUSTOM_DOMAIN_CNAME_TARGET) ??
+    publicHostname(process.env.PUBLIC_WEB_URL) ??
     defaultCnameTarget
   );
 }

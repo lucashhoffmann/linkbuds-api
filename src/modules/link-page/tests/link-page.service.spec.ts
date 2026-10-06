@@ -1,8 +1,6 @@
-import { AppAbilityFactory } from 'src/modules/authorization/application/app-ability.factory';
+import { UserRole } from 'src/modules/user/domain/enums/user-role.enum';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
-import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
-import { PlanType } from 'src/modules/plan/domain/enums/plan-type.enum';
-import { ERROR_CODES } from 'src/shared/constants/errors.constants';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
 import { AnalyticsEventType } from '../domain/enums/analytics-event-type.enum';
 import { AnalyticsTargetType } from '../domain/enums/analytics-target-type.enum';
 import { LinkPageFooterMode } from '../domain/enums/link-page-footer-mode.enum';
@@ -59,12 +57,12 @@ function createService(options?: {
   const linkPageRepository = createRepositoryMock();
   const socialLinkRepository = createRepositoryMock();
   const imageRepository = createRepositoryMock();
-  const planRepository = createRepositoryMock();
   const analyticsRepository =
     options?.analyticsRepository ?? createRepositoryMock();
   const publicCache = {
     get: jest.fn().mockResolvedValue(null),
     invalidateSlug: jest.fn().mockResolvedValue(undefined),
+    invalidatePrefix: jest.fn().mockResolvedValue(undefined),
     set: jest.fn().mockResolvedValue(undefined),
     ...options?.publicCache,
   };
@@ -72,22 +70,14 @@ function createService(options?: {
     transaction: jest.fn((handler) =>
       handler({
         getRepository: jest.fn((entity) =>
-          entity === CompanyEntity
-            ? companyRepository
-            : entity === PlanEntity
-              ? planRepository
-              : linkPageRepository,
+          entity === CompanyEntity ? companyRepository : linkPageRepository,
         ),
       }),
     ),
-    manager: {
-      getRepository: jest.fn(() => planRepository),
-    },
   };
 
   const service = new LinkPageService(
     dataSource as never,
-    new AppAbilityFactory(),
     companyRepository as never,
     domainRepository as never,
     linkPageRepository as never,
@@ -107,7 +97,6 @@ function createService(options?: {
     imageRepository,
     linkRepository,
     linkPageRepository,
-    planRepository,
     publicCache,
     socialLinkRepository,
     service,
@@ -115,19 +104,13 @@ function createService(options?: {
 }
 
 describe('LinkPageService', () => {
-  const auth = { id: 'user-id', companyId: 'company-id' };
+  const auth = { id: 'user-id', companyId: 'company-id', role: UserRole.OWNER };
 
-  it('creates a client page after locking company and loading plan separately', async () => {
-    const { companyRepository, linkPageRepository, planRepository, service } =
-      createService();
+  it('creates a client page after locking the company row', async () => {
+    const { companyRepository, linkPageRepository, service } = createService();
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
-      planId: 'plan-id',
-    });
-    planRepository.findOne.mockResolvedValue({
-      id: 'plan-id',
-      active: true,
-      maxClientPages: 2,
+      plan: { maxClientPages: 2 },
     });
     linkPageRepository.count.mockResolvedValue(1);
     linkPageRepository.save.mockImplementation((value) =>
@@ -146,19 +129,14 @@ describe('LinkPageService', () => {
       layout: LinkPageLayout.LAYOUT_1,
     });
 
-    expect(companyRepository.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lock: { mode: 'pessimistic_write' },
-      }),
-    );
-    expect(companyRepository.findOne).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        relations: expect.anything(),
-      }),
-    );
-    expect(planRepository.findOne).toHaveBeenCalledWith({
-      where: { id: 'plan-id' },
+    expect(companyRepository.findOne).toHaveBeenNthCalledWith(1, {
+      where: { id: auth.companyId },
+      lock: { mode: 'pessimistic_write' },
     });
+    expect(companyRepository.findOne).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ relations: expect.anything() }),
+    );
     expect(linkPageRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: auth.companyId,
@@ -173,17 +151,11 @@ describe('LinkPageService', () => {
     });
   });
 
-  it('checks client page quota inside a transaction with a company lock', async () => {
-    const { companyRepository, linkPageRepository, planRepository, service } =
-      createService();
+  it('rejects client pages beyond the entitled quota', async () => {
+    const { companyRepository, linkPageRepository, service } = createService();
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
-      planId: 'plan-id',
-    });
-    planRepository.findOne.mockResolvedValue({
-      id: 'plan-id',
-      active: true,
-      maxClientPages: 1,
+      plan: { maxClientPages: 1 },
     });
     linkPageRepository.count.mockResolvedValue(1);
 
@@ -197,98 +169,6 @@ describe('LinkPageService', () => {
       errorCode: ERROR_CODES.LINK_PAGE_PLAN_LIMIT_REACHED,
     });
 
-    expect(linkPageRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('returns a business error when company has no active plan', async () => {
-    const { companyRepository, linkPageRepository, planRepository, service } =
-      createService();
-    companyRepository.findOne.mockResolvedValue({
-      id: auth.companyId,
-      planId: 'plan-id',
-    });
-    planRepository.findOne.mockResolvedValue({
-      id: 'plan-id',
-      active: false,
-      maxClientPages: 1,
-    });
-
-    await expect(
-      service.create(auth, {
-        name: 'Cliente',
-        slug: 'cliente',
-        layout: LinkPageLayout.LAYOUT_1,
-      }),
-    ).rejects.toMatchObject({
-      errorCode: ERROR_CODES.LINK_PAGE_PLAN_REQUIRED,
-    });
-    expect(linkPageRepository.count).not.toHaveBeenCalled();
-    expect(linkPageRepository.save).not.toHaveBeenCalled();
-  });
-
-  it('assigns the free plan when an existing company has no plan', async () => {
-    const { companyRepository, linkPageRepository, planRepository, service } =
-      createService();
-    const company = {
-      id: auth.companyId,
-      planId: null,
-    };
-    companyRepository.findOne.mockResolvedValue(company);
-    planRepository.findOne.mockResolvedValue({
-      id: 'free-plan-id',
-      active: true,
-      maxClientPages: 1,
-    });
-    linkPageRepository.count.mockResolvedValue(0);
-    linkPageRepository.save.mockImplementation((value) =>
-      Promise.resolve({
-        id: 'created-page-id',
-        ...value,
-        links: [],
-        socialLinks: [],
-        images: [],
-      }),
-    );
-
-    await expect(
-      service.create(auth, {
-        name: 'Cliente',
-        slug: 'cliente',
-        layout: LinkPageLayout.LAYOUT_1,
-      }),
-    ).resolves.toMatchObject({
-      id: 'created-page-id',
-      slug: 'cliente',
-    });
-    expect(planRepository.findOne).toHaveBeenCalledWith({
-      where: { code: 'FREE', active: true },
-    });
-    expect(companyRepository.save).toHaveBeenCalledWith({
-      ...company,
-      plan: expect.objectContaining({ id: 'free-plan-id' }),
-      planId: 'free-plan-id',
-    });
-  });
-
-  it('returns a business error when company has no plan and free plan is missing', async () => {
-    const { companyRepository, linkPageRepository, planRepository, service } =
-      createService();
-    companyRepository.findOne.mockResolvedValue({
-      id: auth.companyId,
-      planId: null,
-    });
-    planRepository.findOne.mockResolvedValue(null);
-
-    await expect(
-      service.create(auth, {
-        name: 'Cliente',
-        slug: 'cliente',
-        layout: LinkPageLayout.LAYOUT_1,
-      }),
-    ).rejects.toMatchObject({
-      errorCode: ERROR_CODES.LINK_PAGE_PLAN_REQUIRED,
-    });
-    expect(linkPageRepository.count).not.toHaveBeenCalled();
     expect(linkPageRepository.save).not.toHaveBeenCalled();
   });
 
@@ -311,13 +191,13 @@ describe('LinkPageService', () => {
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
       plan: {
-        whiteLabelEnabled: false,
+        whiteLabel: false,
       },
     });
     linkPageRepository.findOne.mockResolvedValue({
       id: 'page-id',
       companyId: auth.companyId,
-      footerMode: LinkPageFooterMode.LINKSBUDS,
+      footerMode: LinkPageFooterMode.LINKBUDS,
     });
 
     await expect(
@@ -342,7 +222,6 @@ describe('LinkPageService', () => {
     });
     const service = new LinkPageService(
       {} as never,
-      new AppAbilityFactory(),
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       linkPageRepository as never,
@@ -389,8 +268,7 @@ describe('LinkPageService', () => {
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
       plan: {
-        analyticsEnabled: true,
-        type: PlanType.FREE,
+        analyticsTier: 'BASIC',
       },
     });
     linkPageRepository.findOne.mockResolvedValue({
@@ -428,13 +306,12 @@ describe('LinkPageService', () => {
     expect(topTargets).toHaveBeenCalledWith('page-id', expect.any(Object), 5);
   });
 
-  it('returns full insights for custom plans even when analyticsEnabled is false', async () => {
+  it('returns full insights for plans with the FULL analytics tier', async () => {
     const { companyRepository, linkPageRepository, service } = createService();
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
       plan: {
-        analyticsEnabled: false,
-        type: PlanType.CUSTOM,
+        analyticsTier: 'FULL',
       },
     });
     linkPageRepository.findOne.mockResolvedValue({
@@ -490,7 +367,6 @@ describe('LinkPageService', () => {
     analyticsRepository.findOne.mockResolvedValue({ id: 'existing-event-id' });
     const service = new LinkPageService(
       {} as never,
-      new AppAbilityFactory(),
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       linkPageRepository as never,
@@ -539,7 +415,6 @@ describe('LinkPageService', () => {
     });
     const service = new LinkPageService(
       {} as never,
-      new AppAbilityFactory(),
       createRepositoryMock() as never,
       createRepositoryMock() as never,
       linkPageRepository as never,
@@ -621,8 +496,7 @@ describe('LinkPageService', () => {
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
       plan: {
-        analyticsEnabled: true,
-        type: PlanType.FREE,
+        analyticsTier: 'BASIC',
       },
     });
     linkPageRepository.findOne.mockResolvedValue({
@@ -656,38 +530,6 @@ describe('LinkPageService', () => {
     );
   });
 
-  it('does not return link click counts when analytics is forbidden', async () => {
-    const analyticsRepository = createRepositoryMock();
-    const analyticsRepositoryWithQueryBuilder =
-      analyticsRepository as typeof analyticsRepository & {
-        createQueryBuilder: jest.Mock;
-      };
-    analyticsRepositoryWithQueryBuilder.createQueryBuilder = jest.fn();
-    const { companyRepository, linkPageRepository, service } = createService({
-      analyticsRepository,
-    });
-    companyRepository.findOne.mockResolvedValue({
-      id: auth.companyId,
-      plan: {
-        analyticsEnabled: false,
-        type: PlanType.FREE,
-      },
-    });
-    linkPageRepository.findOne.mockResolvedValue({
-      id: 'page-id',
-      companyId: auth.companyId,
-    });
-
-    await expect(
-      service.analyticsLinkClicks(auth, 'page-id'),
-    ).rejects.toMatchObject({
-      errorCode: ERROR_CODES.LINK_PAGE_FEATURE_FORBIDDEN,
-    });
-    expect(
-      analyticsRepositoryWithQueryBuilder.createQueryBuilder,
-    ).not.toHaveBeenCalled();
-  });
-
   it('returns cached public LinkPages without querying the database', async () => {
     const cached = {
       id: 'page-id',
@@ -701,7 +543,7 @@ describe('LinkPageService', () => {
       avatarUrl: null,
       title: 'Cliente Roma',
       subtitle: null,
-      footerMode: LinkPageFooterMode.LINKSBUDS,
+      footerMode: LinkPageFooterMode.LINKBUDS,
       footerText: null,
       footerUrl: null,
       footerLogoUrl: null,
@@ -747,7 +589,7 @@ describe('LinkPageService', () => {
       avatarUrl: null,
       title: 'Cliente Roma',
       subtitle: null,
-      footerMode: LinkPageFooterMode.LINKSBUDS,
+      footerMode: LinkPageFooterMode.LINKBUDS,
       footerText: null,
       footerUrl: null,
       footerLogoUrl: null,
@@ -799,14 +641,14 @@ describe('LinkPageService', () => {
     companyRepository.findOne.mockResolvedValue({
       id: auth.companyId,
       plan: {
-        whiteLabelEnabled: true,
+        whiteLabel: true,
       },
     });
     linkPageRepository.findOne.mockResolvedValue({
       id: 'page-id',
       companyId: auth.companyId,
       slug: 'cliente-roma',
-      footerMode: LinkPageFooterMode.LINKSBUDS,
+      footerMode: LinkPageFooterMode.LINKBUDS,
     });
     linkPageRepository.save.mockImplementation((value) =>
       Promise.resolve({
@@ -818,7 +660,7 @@ describe('LinkPageService', () => {
     );
 
     await service.updateFooter(auth, 'page-id', {
-      footerMode: LinkPageFooterMode.LINKSBUDS,
+      footerMode: LinkPageFooterMode.LINKBUDS,
       footerText: null,
       footerUrl: null,
       footerLogoUrl: null,
@@ -840,6 +682,8 @@ describe('LinkPageService', () => {
 
     expect(publicCache.invalidateSlug).toHaveBeenCalledWith('cliente-roma');
     expect(publicCache.invalidateSlug).toHaveBeenCalledTimes(2);
+    // Post paths under the bio go too.
+    expect(publicCache.invalidatePrefix).toHaveBeenCalledWith('cliente-roma/');
   });
 
   it('generates a public sitemap with active non-deleted LinkPages', async () => {
@@ -853,25 +697,36 @@ describe('LinkPageService', () => {
         slug: 'clinica-x',
         updatedAt: new Date('2026-01-03T03:04:05.000Z'),
       },
+      {
+        slug: 'promo-1234',
+        parentPageId: 'roma-id',
+        parentPage: { slug: 'cliente-roma', status: LinkPageStatus.ACTIVE },
+        updatedAt: new Date('2026-01-04T03:04:05.000Z'),
+      },
+      {
+        slug: 'orfao',
+        parentPageId: 'x-id',
+        parentPage: { slug: 'inativa', status: LinkPageStatus.INACTIVE },
+        updatedAt: new Date('2026-01-04T03:04:05.000Z'),
+      },
     ]);
 
-    const sitemap = await service.getPublicSitemap('https://linksbuds.com/');
+    const sitemap = await service.getPublicSitemap('https://linkbuds.com/');
 
     expect(linkPageRepository.find).toHaveBeenCalledWith({
-      select: {
-        slug: true,
-        updatedAt: true,
-      },
+      relations: { parentPage: true },
       where: {
         deletedAt: expect.any(Object),
         status: LinkPageStatus.ACTIVE,
       },
       order: { updatedAt: 'DESC' },
     });
-    expect(sitemap).toContain(
-      '<loc>https://linksbuds.com/p/cliente-roma</loc>',
-    );
+    expect(sitemap).toContain('<loc>https://linkbuds.com/p/cliente-roma</loc>');
     expect(sitemap).toContain('<lastmod>2026-01-02T03:04:05.000Z</lastmod>');
-    expect(sitemap).toContain('<loc>https://linksbuds.com/p/clinica-x</loc>');
+    expect(sitemap).toContain('<loc>https://linkbuds.com/p/clinica-x</loc>');
+    expect(sitemap).toContain(
+      '<loc>https://linkbuds.com/p/cliente-roma/promo-1234</loc>',
+    );
+    expect(sitemap).not.toContain('orfao');
   });
 });

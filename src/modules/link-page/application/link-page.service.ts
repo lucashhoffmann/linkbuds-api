@@ -1,22 +1,19 @@
+import { normalizeHostname } from 'src/shared/utils/hostname';
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { IncomingHttpHeaders } from 'node:http';
 import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
-import { Action } from 'src/modules/authorization/domain/enums/action.enum';
-import { AuthorizationSubject } from 'src/modules/authorization/domain/enums/authorization-subject.enum';
-import { AppAbilityFactory } from 'src/modules/authorization/application/app-ability.factory';
 import { CompanyDomainEntity } from 'src/modules/company/domain/entities/company-domain.entity';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import { CompanyDomainStatus } from 'src/modules/company/domain/enums/company-domain-status.enum';
-import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
-import { PlanType } from 'src/modules/plan/domain/enums/plan-type.enum';
-import { ERROR_CODES } from 'src/shared/constants/errors.constants';
 import {
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-  ValidationException,
-} from 'src/shared/exceptions/business.exception';
+  type AnalyticsTier,
+  ENTITLEMENT_RELATIONS,
+  assertEntitled,
+  entitlementsFor,
+} from 'src/modules/plan/domain/entitlements';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
+import { AppException } from 'src/shared/errors/app.exception';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import { LinkPageAnalyticsEventEntity } from '../domain/entities/link-page-analytics-event.entity';
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
@@ -33,6 +30,7 @@ import { LinkPageType } from '../domain/enums/link-page-type.enum';
 import {
   AnalyticsEventDto,
   CreateLinkPageDto,
+  CreatePostPageDto,
   LinkPageImageDto,
   LinkPageLinkDto,
   LinkPageSocialLinkDto,
@@ -58,8 +56,6 @@ type AnalyticsRange = {
   to: Date;
 };
 
-type AnalyticsTier = 'BASIC' | 'FULL';
-
 type AnalyticsGroup = 'links' | 'sources' | 'devices' | 'countries';
 
 type AnalyticsRequestContext = {
@@ -68,6 +64,10 @@ type AnalyticsRequestContext = {
 
 type PublicLinkPageResponse = {
   id: string;
+  /** Bio slug when this is a post sub-page. */
+  parentSlug: string | null;
+  postNetwork: LinkPageEntity['postNetwork'];
+  postUrl: string | null;
   name: string;
   slug: string;
   status: LinkPageStatus;
@@ -102,10 +102,6 @@ function isUniqueViolation(error: unknown) {
     'code' in error &&
     (error as { code?: string }).code === '23505'
   );
-}
-
-function normalizeHostname(hostname?: string) {
-  return (hostname ?? '').split(':')[0]?.trim().toLowerCase() ?? '';
 }
 
 function getHeaderValue(
@@ -162,16 +158,6 @@ function detectOperatingSystem(userAgent = '') {
   return userAgent ? 'Other' : null;
 }
 
-function analyticsTierForPlan(
-  plan: PlanEntity | null | undefined,
-): AnalyticsTier {
-  if (plan?.type === PlanType.AGENCY || plan?.type === PlanType.CUSTOM) {
-    return 'FULL';
-  }
-
-  return 'BASIC';
-}
-
 function escapeXml(value: string) {
   return value
     .replaceAll('&', '&amp;')
@@ -185,7 +171,6 @@ function escapeXml(value: string) {
 export class LinkPageService {
   constructor(
     private readonly dataSource: DataSource,
-    private readonly abilityFactory: AppAbilityFactory,
     @InjectRepository(CompanyEntity)
     private readonly companyRepository: Repository<CompanyEntity>,
     @InjectRepository(CompanyDomainEntity)
@@ -206,8 +191,32 @@ export class LinkPageService {
     private readonly publicCache?: PublicLinkPageCacheService,
   ) {}
 
-  private async invalidatePublicPageCache(slug: string) {
-    await this.publicCache?.invalidateSlug(slug);
+  /**
+   * Cache is keyed by public path: `cliente` or `cliente/post`.
+   * A bio change also drops its posts' paths (slug renames change them).
+   */
+  private async invalidatePublicPageCache(page: {
+    slug: string;
+    parentPageId: string | null;
+  }) {
+    if (!this.publicCache) {
+      return;
+    }
+
+    if (!page.parentPageId) {
+      await this.publicCache.invalidateSlug(page.slug);
+      await this.publicCache.invalidatePrefix(`${page.slug}/`);
+      return;
+    }
+
+    const parent = await this.linkPageRepository.findOne({
+      where: { id: page.parentPageId },
+      withDeleted: true,
+    });
+
+    if (parent) {
+      await this.publicCache.invalidateSlug(`${parent.slug}/${page.slug}`);
+    }
   }
 
   private async getCompany(
@@ -218,53 +227,35 @@ export class LinkPageService {
     const repository = manager
       ? manager.getRepository(CompanyEntity)
       : this.companyRepository;
+
+    // Postgres can't FOR UPDATE across outer joins: lock the row first.
+    if (lock) {
+      await repository.findOne({
+        where: { id: auth.companyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+    }
+
     const company = await repository.findOne({
       where: { id: auth.companyId },
-      ...(lock ? {} : { relations: { plan: true } }),
-      ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}),
+      relations: ENTITLEMENT_RELATIONS,
     });
 
     if (!company) {
-      throw new NotFoundException(ERROR_CODES.COMPANY_NOT_FOUND);
-    }
-
-    if (lock) {
-      const planRepository = (manager ?? this.dataSource.manager).getRepository(
-        PlanEntity,
-      );
-      company.plan = company.planId
-        ? await planRepository.findOne({ where: { id: company.planId } })
-        : await planRepository.findOne({
-            where: { code: PlanType.FREE, active: true },
-          });
-
-      if (!company.planId && company.plan) {
-        company.planId = company.plan.id;
-        await repository.save(company);
-      }
+      throw new AppException(ERROR_CODES.COMPANY_NOT_FOUND);
     }
 
     return company;
   }
 
-  private assertFeature(
-    company: CompanyEntity,
-    action: Action,
-    authorizationSubject: AuthorizationSubject,
-  ) {
-    const ability = this.abilityFactory.createForCompany(company);
-    this.abilityFactory.assertCan(ability, action, authorizationSubject, {
-      companyId: company.id,
-    });
-  }
-
   private async getPageForCompany(companyId: string, id: string) {
     const page = await this.linkPageRepository.findOne({
       where: { id, companyId },
+      relations: { parentPage: true },
     });
 
     if (!page) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
     return page;
@@ -312,9 +303,7 @@ export class LinkPageService {
       return;
     }
 
-    throw new ValidationException(
-      ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION,
-    );
+    throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_LINK_CONFIGURATION);
   }
 
   private parseRange(
@@ -466,12 +455,13 @@ export class LinkPageService {
     const company = await this.getCompany(auth);
     const pages = await this.linkPageRepository.find({
       where: { companyId: auth.companyId },
+      relations: { parentPage: true },
       order: { type: 'ASC', createdAt: 'DESC' },
     });
     const usedClientPages = await this.linkPageRepository.count({
       where: { companyId: auth.companyId, type: LinkPageType.CLIENT },
     });
-    const maxClientPages = company.plan?.maxClientPages ?? 0;
+    const { maxClientPages } = entitlementsFor(company);
 
     return {
       items: pages.map(toLinkPageSummary),
@@ -493,25 +483,21 @@ export class LinkPageService {
     const detail = await this.dataSource.transaction(async (manager) => {
       const company = await this.getCompany(auth, manager, true);
 
-      if (!company.plan?.active) {
-        throw new ForbiddenException(ERROR_CODES.LINK_PAGE_PLAN_REQUIRED);
-      }
-
       const linkPageRepository = manager.getRepository(LinkPageEntity);
       const existingSlug = await linkPageRepository.findOne({
-        where: { slug: dto.slug },
+        where: { slug: dto.slug, parentPageId: IsNull() },
       });
 
       if (existingSlug) {
-        throw new ConflictException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
+        throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
       }
 
       const usedClientPages = await linkPageRepository.count({
         where: { companyId: auth.companyId, type: LinkPageType.CLIENT },
       });
 
-      if (usedClientPages >= company.plan.maxClientPages) {
-        throw new ForbiddenException(ERROR_CODES.LINK_PAGE_PLAN_LIMIT_REACHED);
+      if (usedClientPages >= entitlementsFor(company).maxClientPages) {
+        throw new AppException(ERROR_CODES.LINK_PAGE_PLAN_LIMIT_REACHED);
       }
 
       const page = linkPageRepository.create({
@@ -528,48 +514,55 @@ export class LinkPageService {
         return toLinkPageDetail(await linkPageRepository.save(page));
       } catch (error) {
         if (isUniqueViolation(error)) {
-          throw new ConflictException(
-            ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS,
-          );
+          throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
         }
 
         throw error;
       }
     });
 
-    await this.invalidatePublicPageCache(detail.slug);
+    await this.invalidatePublicPageCache(detail);
 
     return detail;
   }
 
   async update(auth: AuthPayload, id: string, dto: UpdateLinkPageDto) {
     const page = await this.getPageForCompany(auth.companyId, id);
-    const previousSlug = page.slug;
+    const previous = { slug: page.slug, parentPageId: page.parentPageId };
 
     if (dto.slug && dto.slug !== page.slug) {
+      // Bio slugs are global; post slugs are unique within their bio.
       const existing = await this.linkPageRepository.findOne({
-        where: { slug: dto.slug },
+        where: {
+          slug: dto.slug,
+          parentPageId: page.parentPageId ?? IsNull(),
+        },
       });
 
       if (existing && existing.id !== page.id) {
-        throw new ConflictException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
+        throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
       }
     }
 
-    Object.assign(page, dto);
+    const { postNetwork, postUrl, ...pageFields } = dto;
+    Object.assign(
+      page,
+      pageFields,
+      page.type === LinkPageType.POST ? { postNetwork, postUrl } : {},
+    );
 
     try {
       const detail = toLinkPageDetail(await this.linkPageRepository.save(page));
 
-      await this.invalidatePublicPageCache(previousSlug);
-      if (detail.slug !== previousSlug) {
-        await this.invalidatePublicPageCache(detail.slug);
+      await this.invalidatePublicPageCache(previous);
+      if (detail.slug !== previous.slug) {
+        await this.invalidatePublicPageCache(detail);
       }
 
       return detail;
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new ConflictException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
+        throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
       }
 
       throw error;
@@ -580,13 +573,72 @@ export class LinkPageService {
     const page = await this.getPageForCompany(auth.companyId, id);
 
     if (page.type === LinkPageType.AGENCY) {
-      throw new ForbiddenException(ERROR_CODES.LINK_PAGE_AGENCY_PROTECTED);
+      throw new AppException(ERROR_CODES.LINK_PAGE_AGENCY_PROTECTED);
     }
 
-    await this.linkPageRepository.softDelete(id);
-    await this.invalidatePublicPageCache(page.slug);
+    // A bio takes its post sub-pages with it.
+    await this.linkPageRepository.softDelete({ parentPageId: id });
+    await this.linkPageRepository.softDelete({ id });
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'LinkPage removida com sucesso' };
+  }
+
+  /** Post sub-page (/p/:bio/:post), styled like its bio at creation time. */
+  async createPost(
+    auth: AuthPayload,
+    parentId: string,
+    dto: CreatePostPageDto,
+  ) {
+    const parent = await this.getPageForCompany(auth.companyId, parentId);
+
+    if (parent.type === LinkPageType.POST) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_INVALID_PARENT);
+    }
+
+    const existing = await this.linkPageRepository.findOne({
+      where: { parentPageId: parent.id, slug: dto.slug },
+    });
+
+    if (existing) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
+    }
+
+    const post = this.linkPageRepository.create({
+      companyId: auth.companyId,
+      parentPageId: parent.id,
+      parentPage: parent,
+      type: LinkPageType.POST,
+      status: LinkPageStatus.ACTIVE,
+      name: dto.name,
+      slug: dto.slug,
+      title: dto.title ?? parent.title,
+      subtitle: null,
+      postNetwork: dto.postNetwork ?? null,
+      postUrl: dto.postUrl ?? null,
+      layout: parent.layout,
+      backgroundType: parent.backgroundType,
+      backgroundColor: parent.backgroundColor,
+      backgroundImageUrl: parent.backgroundImageUrl,
+      avatarUrl: parent.avatarUrl,
+      footerMode: parent.footerMode,
+      footerText: parent.footerText,
+      footerUrl: parent.footerUrl,
+      footerLogoUrl: parent.footerLogoUrl,
+    });
+
+    try {
+      const detail = toLinkPageDetail(await this.linkPageRepository.save(post));
+      await this.invalidatePublicPageCache(detail);
+
+      return detail;
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new AppException(ERROR_CODES.LINK_PAGE_SLUG_ALREADY_EXISTS);
+      }
+
+      throw error;
+    }
   }
 
   async updateFooter(auth: AuthPayload, id: string, dto: UpdateFooterDto) {
@@ -595,12 +647,8 @@ export class LinkPageService {
       this.getPageForCompany(auth.companyId, id),
     ]);
 
-    if (dto.footerMode !== LinkPageFooterMode.LINKSBUDS) {
-      this.assertFeature(
-        company,
-        Action.ManageWhiteLabel,
-        AuthorizationSubject.LinkPageWhiteLabel,
-      );
+    if (dto.footerMode !== LinkPageFooterMode.LINKBUDS) {
+      assertEntitled(company, 'whiteLabel');
     }
 
     page.footerMode = dto.footerMode;
@@ -610,7 +658,7 @@ export class LinkPageService {
 
     const detail = toLinkPageDetail(await this.linkPageRepository.save(page));
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return detail;
   }
@@ -632,7 +680,7 @@ export class LinkPageService {
       }),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return toLinkPageLinkResponse(link);
   }
@@ -649,7 +697,7 @@ export class LinkPageService {
     });
 
     if (!link) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
     Object.assign(link, dto);
@@ -659,7 +707,7 @@ export class LinkPageService {
       await this.linkRepository.save(link),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return response;
   }
@@ -672,10 +720,10 @@ export class LinkPageService {
     });
 
     if (!result.affected) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'Link removido com sucesso' };
   }
@@ -692,7 +740,7 @@ export class LinkPageService {
     });
 
     if (links.length !== ids.length) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
     const sortOrderById = new Map(dto.map((item) => [item.id, item.sortOrder]));
@@ -703,7 +751,7 @@ export class LinkPageService {
       }),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'Links reordenados com sucesso' };
   }
@@ -718,7 +766,7 @@ export class LinkPageService {
       this.socialLinkRepository.create({ ...dto, linkPageId }),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return toSocialLinkResponse(socialLink);
   }
@@ -735,7 +783,7 @@ export class LinkPageService {
     });
 
     if (!socialLink) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
     Object.assign(socialLink, dto);
@@ -744,7 +792,7 @@ export class LinkPageService {
       await this.socialLinkRepository.save(socialLink),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return response;
   }
@@ -761,10 +809,10 @@ export class LinkPageService {
     });
 
     if (!result.affected) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'Rede social removida com sucesso' };
   }
@@ -781,7 +829,7 @@ export class LinkPageService {
     });
 
     if (socialLinks.length !== ids.length) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
     const sortOrderById = new Map(dto.map((item) => [item.id, item.sortOrder]));
@@ -793,7 +841,7 @@ export class LinkPageService {
       }),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'Redes sociais reordenadas com sucesso' };
   }
@@ -813,7 +861,7 @@ export class LinkPageService {
       }),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return toImageResponse(image);
   }
@@ -830,14 +878,14 @@ export class LinkPageService {
     });
 
     if (!image) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
     Object.assign(image, dto);
 
     const response = toImageResponse(await this.imageRepository.save(image));
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return response;
   }
@@ -850,10 +898,10 @@ export class LinkPageService {
     });
 
     if (!result.affected) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'Imagem removida com sucesso' };
   }
@@ -870,7 +918,7 @@ export class LinkPageService {
     });
 
     if (images.length !== ids.length) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND);
     }
 
     const sortOrderById = new Map(dto.map((item) => [item.id, item.sortOrder]));
@@ -881,7 +929,7 @@ export class LinkPageService {
       }),
     );
 
-    await this.invalidatePublicPageCache(page.slug);
+    await this.invalidatePublicPageCache(page);
 
     return { message: 'Imagens reordenadas com sucesso' };
   }
@@ -896,7 +944,7 @@ export class LinkPageService {
     });
 
     if (!page) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
     const userAgent = getHeaderValue(context.headers, 'user-agent') ?? '';
@@ -963,7 +1011,7 @@ export class LinkPageService {
     });
 
     if (!page) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
     const onlineNow =
@@ -978,70 +1026,99 @@ export class LinkPageService {
       this.getPageForCompany(auth.companyId, linkPageId),
     ]);
 
-    this.assertFeature(
-      company,
-      Action.ViewAnalytics,
-      AuthorizationSubject.LinkPageAnalytics,
-    );
-
     return {
       company,
-      tier: analyticsTierForPlan(company.plan),
+      tier: entitlementsFor(company).analyticsTier,
     };
   }
 
-  async analyticsSummary(
-    auth: AuthPayload,
-    linkPageId: string,
-    from?: string,
-    to?: string,
-  ) {
-    const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
+  async overview(auth: AuthPayload, from?: string, to?: string) {
+    const company = await this.getCompany(auth);
+    const tier = entitlementsFor(company).analyticsTier;
     const range = this.parseAnalyticsRange(tier, from, to);
+    const pages = await this.linkPageRepository.find({
+      where: { companyId: auth.companyId },
+      relations: { parentPage: true },
+    });
+    const pageIds = pages.map((page) => page.id);
+    const clickTypes = [
+      AnalyticsEventType.LINK_CLICK,
+      AnalyticsEventType.SOCIAL_CLICK,
+      AnalyticsEventType.IMAGE_CLICK,
+    ];
+    const base = () =>
+      this.analyticsRepository
+        .createQueryBuilder('event')
+        .where('event.linkPageId IN (:...pageIds)', { pageIds })
+        .andWhere('event.createdAt BETWEEN :from AND :to', range)
+        .setParameters({ pageView: AnalyticsEventType.PAGE_VIEW, clickTypes });
 
-    return this.getAnalyticsSummaryData(linkPageId, range);
-  }
+    const [rows, totals] = pageIds.length
+      ? await Promise.all([
+          base()
+            .select('event.linkPageId', 'linkPageId')
+            .addSelect(
+              'COUNT(*) FILTER (WHERE event.eventType = :pageView)',
+              'pageViews',
+            )
+            .addSelect(
+              'COUNT(DISTINCT event.visitorId) FILTER (WHERE event.eventType = :pageView)',
+              'visitors',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE event.eventType IN (:...clickTypes))',
+              'clicks',
+            )
+            .groupBy('event.linkPageId')
+            .getRawMany<{
+              linkPageId: string;
+              pageViews: string;
+              visitors: string;
+              clicks: string;
+            }>(),
+          base()
+            .select(
+              'COUNT(*) FILTER (WHERE event.eventType = :pageView)',
+              'pageViews',
+            )
+            .addSelect(
+              'COUNT(DISTINCT event.visitorId) FILTER (WHERE event.eventType = :pageView)',
+              'visitors',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE event.eventType IN (:...clickTypes))',
+              'clicks',
+            )
+            .getRawOne<{
+              pageViews: string;
+              visitors: string;
+              clicks: string;
+            }>(),
+        ])
+      : [[], undefined];
+    const byPage = new Map(rows.map((row) => [row.linkPageId, row]));
 
-  async analyticsTimeseries(
-    auth: AuthPayload,
-    linkPageId: string,
-    from?: string,
-    to?: string,
-  ) {
-    const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
+    return {
+      tier,
+      range: { from: range.from.toISOString(), to: range.to.toISOString() },
+      totals: {
+        pageViews: Number(totals?.pageViews ?? 0),
+        visitors: Number(totals?.visitors ?? 0),
+        clicks: Number(totals?.clicks ?? 0),
+      },
+      pages: pages
+        .map((page) => {
+          const row = byPage.get(page.id);
 
-    if (tier === 'BASIC') {
-      return [];
-    }
-
-    const range = this.parseAnalyticsRange(tier, from, to);
-
-    return this.getAnalyticsTimeseriesData(linkPageId, range);
-  }
-
-  async analyticsGroup(
-    auth: AuthPayload,
-    linkPageId: string,
-    group: AnalyticsGroup,
-    from?: string,
-    to?: string,
-  ) {
-    const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
-    const range = this.parseAnalyticsRange(tier, from, to);
-
-    if (group === 'links') {
-      return this.getTopTargets(
-        linkPageId,
-        range,
-        tier === 'BASIC' ? 5 : undefined,
-      );
-    }
-
-    if (tier === 'BASIC') {
-      return [];
-    }
-
-    return this.getAnalyticsGroupData(linkPageId, group, range);
+          return {
+            ...toLinkPageSummary(page),
+            pageViews: Number(row?.pageViews ?? 0),
+            visitors: Number(row?.visitors ?? 0),
+            clicks: Number(row?.clicks ?? 0),
+          };
+        })
+        .sort((a, b) => b.pageViews - a.pageViews || b.clicks - a.clicks),
+    };
   }
 
   async analyticsInsights(
@@ -1089,14 +1166,19 @@ export class LinkPageService {
     };
   }
 
-  async analyticsLinkClicks(auth: AuthPayload, linkPageId: string) {
-    await this.assertAnalyticsAccess(auth, linkPageId);
+  /** Clicks per editable link, in the same tier window as the insights. */
+  async analyticsLinkClicks(
+    auth: AuthPayload,
+    linkPageId: string,
+    from?: string,
+    to?: string,
+  ) {
+    const { tier } = await this.assertAnalyticsAccess(auth, linkPageId);
+    const range = this.parseAnalyticsRange(tier, from, to);
 
-    const rows = await this.analyticsRepository
-      .createQueryBuilder('event')
+    const rows = await this.createAnalyticsBaseQuery(linkPageId, range)
       .select('event.targetId', 'linkId')
       .addSelect('COUNT(*)', 'clicks')
-      .where('event.linkPageId = :linkPageId', { linkPageId })
       .andWhere('event.eventType = :eventType', {
         eventType: AnalyticsEventType.LINK_CLICK,
       })
@@ -1122,19 +1204,26 @@ export class LinkPageService {
   async getPublicSitemap(publicWebUrl: string) {
     const baseUrl = publicWebUrl.replace(/\/$/, '');
     const pages = await this.linkPageRepository.find({
-      select: {
-        slug: true,
-        updatedAt: true,
-      },
       where: { deletedAt: IsNull(), status: LinkPageStatus.ACTIVE },
+      relations: { parentPage: true },
       order: { updatedAt: 'DESC' },
     });
+    const paths = pages.flatMap((page) => {
+      if (!page.parentPageId) return [{ path: page.slug, page }];
+      const parent = page.parentPage;
+      const parentVisible =
+        parent && !parent.deletedAt && parent.status === LinkPageStatus.ACTIVE;
 
-    const urls = pages
+      return parentVisible
+        ? [{ path: `${parent.slug}/${page.slug}`, page }]
+        : [];
+    });
+
+    const urls = paths
       .map(
-        (page) => `
+        ({ path, page }) => `
   <url>
-    <loc>${escapeXml(`${baseUrl}/p/${page.slug}`)}</loc>
+    <loc>${escapeXml(`${baseUrl}/p/${path}`)}</loc>
     <lastmod>${page.updatedAt.toISOString()}</lastmod>
     <changefreq>daily</changefreq>
     <priority>0.8</priority>
@@ -1147,49 +1236,85 @@ export class LinkPageService {
 </urlset>`;
   }
 
+  /** Only ACTIVE domains serve pages: ownership (TXT) and routing proven. */
+  private findActiveDomain(hostname: string | undefined) {
+    return hostname
+      ? this.domainRepository.findOne({
+          where: {
+            deletedAt: IsNull(),
+            hostname,
+            status: CompanyDomainStatus.ACTIVE,
+          },
+        })
+      : Promise.resolve(null);
+  }
+
+  /** Root of a custom domain (`dominio.com/`) shows the agency's own page. */
+  async resolveDomainHome(
+    hostname: string | undefined,
+  ): Promise<PublicLinkPageResponse> {
+    const normalizedHostname = normalizeHostname(hostname);
+    const domain = await this.findActiveDomain(normalizedHostname);
+    const page = domain
+      ? await this.linkPageRepository.findOne({
+          where: {
+            companyId: domain.companyId,
+            type: LinkPageType.AGENCY,
+            status: LinkPageStatus.ACTIVE,
+            deletedAt: IsNull(),
+          },
+        })
+      : null;
+
+    if (!page) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+    }
+
+    return this.resolvePublic(normalizedHostname, page.slug);
+  }
+
+  /** `/p/:slug` (bio) or `/p/:slug/:postSlug` (post sub-page). */
   async resolvePublic(
     hostname: string | undefined,
     slug: string,
+    postSlug?: string,
   ): Promise<PublicLinkPageResponse> {
     const normalizedHostname = normalizeHostname(hostname);
+    const cachePath = postSlug ? `${slug}/${postSlug}` : slug;
     const cached = await this.publicCache?.get<PublicLinkPageResponse>(
       normalizedHostname,
-      slug,
+      cachePath,
     );
 
     if (cached) {
       return cached;
     }
 
-    const customDomain = normalizedHostname
-      ? await this.domainRepository.findOne({
-          where: [
-            {
-              deletedAt: IsNull(),
-              hostname: normalizedHostname,
-              status: CompanyDomainStatus.ACTIVE,
-            },
-            {
-              deletedAt: IsNull(),
-              hostname: normalizedHostname,
-              status: CompanyDomainStatus.VERIFIED,
-            },
-          ],
-        })
-      : null;
+    const customDomain = await this.findActiveDomain(normalizedHostname);
 
-    const where = customDomain
-      ? {
-          companyId: customDomain.companyId,
-          deletedAt: IsNull(),
-          slug,
-          status: LinkPageStatus.ACTIVE,
-        }
-      : { deletedAt: IsNull(), slug, status: LinkPageStatus.ACTIVE };
-    const page = await this.linkPageRepository.findOne({ where });
+    const bio = await this.linkPageRepository.findOne({
+      where: {
+        ...(customDomain ? { companyId: customDomain.companyId } : {}),
+        parentPageId: IsNull(),
+        deletedAt: IsNull(),
+        slug,
+        status: LinkPageStatus.ACTIVE,
+      },
+    });
+    const page =
+      bio && postSlug
+        ? await this.linkPageRepository.findOne({
+            where: {
+              parentPageId: bio.id,
+              deletedAt: IsNull(),
+              slug: postSlug,
+              status: LinkPageStatus.ACTIVE,
+            },
+          })
+        : bio;
 
     if (!page) {
-      throw new NotFoundException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+      throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
     }
 
     const [links, socialLinks, images] = await Promise.all([
@@ -1233,12 +1358,15 @@ export class LinkPageService {
       footerText: detail.footerText,
       footerUrl: detail.footerUrl,
       footerLogoUrl: detail.footerLogoUrl,
+      parentSlug: postSlug ? slug : null,
+      postNetwork: detail.postNetwork,
+      postUrl: detail.postUrl,
       links: detail.links,
       socialLinks: detail.socialLinks,
       images: detail.images,
     };
 
-    await this.publicCache?.set(normalizedHostname, slug, response);
+    await this.publicCache?.set(normalizedHostname, cachePath, response);
 
     return response;
   }

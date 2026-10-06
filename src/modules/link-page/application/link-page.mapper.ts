@@ -1,4 +1,3 @@
-import { LinkPageAnalyticsEventEntity } from '../domain/entities/link-page-analytics-event.entity';
 import { LinkPageImageEntity } from '../domain/entities/link-page-image.entity';
 import { LinkPageLinkEntity } from '../domain/entities/link-page-link.entity';
 import { LinkPageSocialLinkEntity } from '../domain/entities/link-page-social-link.entity';
@@ -10,7 +9,14 @@ export function toLinkPageSummary(page: LinkPageEntity) {
     companyId: page.companyId,
     name: page.name,
     slug: page.slug,
+    /** Path after `/p/`: `bio` or `bio/post`. Needs `parentPage` loaded for posts. */
+    publicPath: page.parentPage
+      ? `${page.parentPage.slug}/${page.slug}`
+      : page.slug,
     type: page.type,
+    parentPageId: page.parentPageId,
+    postNetwork: page.postNetwork,
+    postUrl: page.postUrl,
     status: page.status,
     layout: page.layout,
     title: page.title,
@@ -73,16 +79,5 @@ export function toLinkPageDetail(page: LinkPageEntity) {
     links: (page.links ?? []).map(toLinkPageLinkResponse),
     socialLinks: (page.socialLinks ?? []).map(toSocialLinkResponse),
     images: (page.images ?? []).map(toImageResponse),
-  };
-}
-
-export function toAnalyticsEventResponse(event: LinkPageAnalyticsEventEntity) {
-  return {
-    id: event.id,
-    linkPageId: event.linkPageId,
-    eventType: event.eventType,
-    targetType: event.targetType,
-    targetId: event.targetId,
-    createdAt: event.createdAt,
   };
 }

@@ -1,5 +1,5 @@
 export enum LinkPageFooterMode {
-  LINKSBUDS = 'LINKSBUDS',
+  LINKBUDS = 'LINKBUDS',
   CUSTOM = 'CUSTOM',
   HIDDEN = 'HIDDEN',
 }

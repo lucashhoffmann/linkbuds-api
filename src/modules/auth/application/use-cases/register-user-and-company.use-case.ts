@@ -1,84 +1,80 @@
 import { Injectable } from '@nestjs/common';
-import * as argon2 from 'argon2';
 import { DataSource } from 'typeorm';
-import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
 import { PlanEntity } from 'src/modules/plan/domain/entities/plan.entity';
-import { PlanType } from 'src/modules/plan/domain/enums/plan-type.enum';
-import { UserEntity } from 'src/modules/user/domain/entities/user.entity';
-import { ERROR_CODES } from 'src/shared/constants/errors.constants';
+import { DEFAULT_PLAN_CODE } from 'src/modules/plan/domain/entitlements';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
+import { AppException } from 'src/shared/errors/app.exception';
+import { getBetterAuth } from '../../infra/better-auth.config';
 import {
-  ConflictException,
-  ForbiddenException,
-} from 'src/shared/exceptions/business.exception';
+  acceptInvite,
+  assertInviteEmail,
+  findValidInvite,
+} from 'src/modules/team/application/invite-token';
+import { provisionAccount } from '../provision-account';
 import { RegisterUserAndCompanyDto } from '../dto/register-user-and-company.dto';
+
+const DUPLICATE_USER_CODES = [
+  'USER_ALREADY_EXISTS',
+  'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL',
+];
+
+function isDuplicateUserError(error: unknown) {
+  const code = (error as { body?: { code?: string } } | null)?.body?.code;
+
+  return Boolean(code && DUPLICATE_USER_CODES.includes(code));
+}
 
 @Injectable()
 export class RegisterUserAndCompanyUseCase {
   constructor(private readonly dataSource: DataSource) {}
 
   async execute(dto: RegisterUserAndCompanyDto) {
-    const name = dto.name.trim();
     const email = dto.email.trim().toLowerCase();
 
-    return this.dataSource.transaction(async (manager) => {
-      const companyRepository = manager.getRepository(CompanyEntity);
-      const planRepository = manager.getRepository(PlanEntity);
-      const userRepository = manager.getRepository(UserEntity);
-
-      const existingCompany = await companyRepository.findOne({
-        where: { email },
-      });
-      const existingUser = await userRepository.findOne({
-        where: { email },
-      });
-
-      if (existingCompany || existingUser) {
-        throw new ConflictException(ERROR_CODES.USER_EMAIL_ALREADY_EXISTS);
-      }
-
-      const freePlan = await planRepository.findOne({
-        where: { code: PlanType.FREE, active: true },
-      });
-
-      if (!freePlan) {
-        throw new ForbiddenException(ERROR_CODES.LINK_PAGE_PLAN_REQUIRED);
-      }
-
-      const company = await companyRepository.save(
-        companyRepository.create({
-          name: dto.companyName?.trim() || `Empresa de ${name}`,
-          email,
-          planId: freePlan.id,
-        }),
+    // Fail before creating the credential when sign-up is impossible.
+    if (dto.inviteToken) {
+      assertInviteEmail(
+        await findValidInvite(this.dataSource.manager, dto.inviteToken),
+        email,
       );
+    } else {
+      await this.assertDefaultPlan();
+    }
 
-      const password = await argon2.hash(dto.password);
-      const user = await userRepository.save(
-        userRepository.create({
-          name,
-          email,
-          password,
-          company,
-        }),
-      );
+    const user = await this.signUp(dto.name.trim(), email, dto.password);
 
-      await manager.query(
-        `
-          INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt")
-          VALUES ($1, $2, $3, false, now(), now())
-        `,
-        [user.id, user.name, user.email],
-      );
+    if (dto.inviteToken) {
+      await acceptInvite(this.dataSource, user, dto.inviteToken);
+    } else {
+      // If this fails, AuthGuard provisions the account on first login.
+      await provisionAccount(this.dataSource, user, dto.companyName);
+    }
 
-      await manager.query(
-        `
-          INSERT INTO "account" ("id", "accountId", "providerId", "userId", "password", "createdAt", "updatedAt")
-          VALUES (uuid_generate_v4()::text, $1, 'credential', $1, $2, now(), now())
-        `,
-        [user.id, password],
-      );
+    return { ok: true };
+  }
 
-      return { ok: true };
+  private async assertDefaultPlan() {
+    const freePlan = await this.dataSource.getRepository(PlanEntity).findOne({
+      where: { code: DEFAULT_PLAN_CODE, active: true },
     });
+
+    if (!freePlan) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_PLAN_REQUIRED);
+    }
+  }
+
+  private async signUp(name: string, email: string, password: string) {
+    const auth = await getBetterAuth();
+    const { user } = await auth.api
+      .signUpEmail({ body: { name, email, password } })
+      .catch((error: unknown) => {
+        if (isDuplicateUserError(error)) {
+          throw new AppException(ERROR_CODES.USER_EMAIL_ALREADY_EXISTS);
+        }
+
+        throw error;
+      });
+
+    return user;
   }
 }

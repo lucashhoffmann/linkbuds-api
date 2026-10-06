@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ERROR_CODES, ERRORS } from 'src/shared/constants/errors.constants';
+import { ERROR_CODES, ERRORS } from 'src/shared/errors/error-catalog';
 
 export const registerUserAndCompanyDto = z.object({
   name: z
@@ -15,6 +15,8 @@ export const registerUserAndCompanyDto = z.object({
     .string({ error: ERRORS[ERROR_CODES.VALIDATION_REQUIRED_FIELD].message })
     .min(1, ERRORS[ERROR_CODES.VALIDATION_REQUIRED_FIELD].message)
     .optional(),
+  /** Joins the inviting company instead of creating one. */
+  inviteToken: z.string().trim().min(10).optional(),
 });
 
 export type RegisterUserAndCompanyDto = z.infer<

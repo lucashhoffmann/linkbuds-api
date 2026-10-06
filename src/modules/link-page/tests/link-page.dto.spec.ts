@@ -2,6 +2,9 @@ import {
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
+  updateLinkPageImageDto,
+  updateLinkPageLinkDto,
+  updateLinkPageSocialLinkDto,
 } from '../application/dto/link-page.dto';
 
 describe('LinkPage DTOs', () => {
@@ -34,5 +37,17 @@ describe('LinkPage DTOs', () => {
     expect(linkResult?.success).toBe(false);
     expect(socialResult?.success).toBe(false);
     expect(imageResult?.success).toBe(false);
+  });
+
+  it('keeps PATCH payloads partial without re-applying create defaults', () => {
+    expect(updateLinkPageLinkDto.parse({ label: 'Novo' })).toEqual({
+      label: 'Novo',
+    });
+    expect(updateLinkPageSocialLinkDto.parse({ sortOrder: 2 })).toEqual({
+      sortOrder: 2,
+    });
+    expect(updateLinkPageImageDto.parse({ active: false })).toEqual({
+      active: false,
+    });
   });
 });

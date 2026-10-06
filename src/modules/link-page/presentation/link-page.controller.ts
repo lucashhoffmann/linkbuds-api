@@ -18,6 +18,7 @@ import { ZodValidationPipe } from 'src/shared/pipes/zod-validation.pipe';
 import type { AuthPayload } from 'src/shared/types/auth-payload.types';
 import {
   createLinkPageDto,
+  createPostPageDto,
   linkPageImageDto,
   linkPageLinkDto,
   linkPageSocialLinkDto,
@@ -28,6 +29,7 @@ import {
   updateLinkPageLinkDto,
   updateLinkPageSocialLinkDto,
   type CreateLinkPageDto,
+  type CreatePostPageDto,
   type LinkPageImageDto,
   type LinkPageLinkDto,
   type LinkPageSocialLinkDto,
@@ -49,6 +51,16 @@ export class LinkPageController {
   @Get()
   list(@GetAuth() auth: AuthPayload) {
     return this.linkPageService.list(auth);
+  }
+
+  /** Agency dashboard: traffic per page in the plan's analytics window. */
+  @Get('overview')
+  overview(
+    @GetAuth() auth: AuthPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.linkPageService.overview(auth, from, to);
   }
 
   @Get(':id')
@@ -74,6 +86,15 @@ export class LinkPageController {
     @Body(new ZodValidationPipe(updateLinkPageDto)) dto: UpdateLinkPageDto,
   ) {
     return this.linkPageService.update(auth, id, dto);
+  }
+
+  @Post(':id/posts')
+  createPost(
+    @GetAuth() auth: AuthPayload,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(createPostPageDto)) dto: CreatePostPageDto,
+  ) {
+    return this.linkPageService.createPost(auth, id, dto);
   }
 
   @Delete(':id')
@@ -208,16 +229,6 @@ export class LinkPageController {
     return this.linkPageService.deleteImage(auth, id, imageId);
   }
 
-  @Get(':id/analytics/summary')
-  analyticsSummary(
-    @GetAuth() auth: AuthPayload,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-  ) {
-    return this.linkPageService.analyticsSummary(auth, id, from, to);
-  }
-
   @Get(':id/analytics/insights')
   analyticsInsights(
     @GetAuth() auth: AuthPayload,
@@ -232,57 +243,9 @@ export class LinkPageController {
   analyticsLinkClicks(
     @GetAuth() auth: AuthPayload,
     @Param('id', new ParseUUIDPipe()) id: string,
-  ) {
-    return this.linkPageService.analyticsLinkClicks(auth, id);
-  }
-
-  @Get(':id/analytics/timeseries')
-  analyticsTimeseries(
-    @GetAuth() auth: AuthPayload,
-    @Param('id', new ParseUUIDPipe()) id: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.linkPageService.analyticsTimeseries(auth, id, from, to);
-  }
-
-  @Get(':id/analytics/links')
-  analyticsLinks(
-    @GetAuth() auth: AuthPayload,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-  ) {
-    return this.linkPageService.analyticsGroup(auth, id, 'links', from, to);
-  }
-
-  @Get(':id/analytics/sources')
-  analyticsSources(
-    @GetAuth() auth: AuthPayload,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-  ) {
-    return this.linkPageService.analyticsGroup(auth, id, 'sources', from, to);
-  }
-
-  @Get(':id/analytics/devices')
-  analyticsDevices(
-    @GetAuth() auth: AuthPayload,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-  ) {
-    return this.linkPageService.analyticsGroup(auth, id, 'devices', from, to);
-  }
-
-  @Get(':id/analytics/countries')
-  analyticsCountries(
-    @GetAuth() auth: AuthPayload,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-  ) {
-    return this.linkPageService.analyticsGroup(auth, id, 'countries', from, to);
+    return this.linkPageService.analyticsLinkClicks(auth, id, from, to);
   }
 }

@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
+import { RedisClient } from 'src/shared/redis/redis.client';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AuthorizationModule } from '../authorization/authorization.module';
 import { CompanyDomainEntity } from '../company/domain/entities/company-domain.entity';
 import { CompanyEntity } from '../company/domain/entities/company.entity';
 import { LinkPageService } from './application/link-page.service';
@@ -16,7 +16,6 @@ import { PublicLinkPageController } from './presentation/public-link-page.contro
 
 @Module({
   imports: [
-    AuthorizationModule,
     TypeOrmModule.forFeature([
       CompanyEntity,
       CompanyDomainEntity,
@@ -29,6 +28,7 @@ import { PublicLinkPageController } from './presentation/public-link-page.contro
   ],
   controllers: [LinkPageController, PublicLinkPageController],
   providers: [
+    RedisClient,
     LinkPageService,
     LinkPagePresenceService,
     PublicLinkPageCacheService,

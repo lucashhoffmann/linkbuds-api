@@ -1,42 +1,25 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import Redis from 'ioredis';
+import { normalizeHostname } from 'src/shared/utils/hostname';
+import { Injectable } from '@nestjs/common';
+import { RedisClient, positiveIntFromEnv } from 'src/shared/redis/redis.client';
 
 const defaultPublicCacheTtlSeconds = 300;
 const publicCacheKeyPrefix = 'linkbuds:public-link-page';
-
-function parsePositiveInteger(value: string | undefined, fallback: number) {
-  const parsed = Number(value);
-
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function normalizeHostname(hostname?: string) {
-  return (hostname ?? '').split(':')[0]?.trim().toLowerCase() ?? '';
-}
 
 function encodeCachePart(value: string) {
   return encodeURIComponent(value);
 }
 
 @Injectable()
-export class PublicLinkPageCacheService implements OnModuleDestroy {
-  private readonly redis: Redis;
-  private readonly ttlSeconds = parsePositiveInteger(
+export class PublicLinkPageCacheService {
+  private readonly ttlSeconds = positiveIntFromEnv(
     process.env.LINK_PAGE_PUBLIC_CACHE_TTL_SECONDS,
     defaultPublicCacheTtlSeconds,
   );
 
-  constructor() {
-    this.redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
-      lazyConnect: true,
-      maxRetriesPerRequest: 1,
-      retryStrategy: () => null,
-    });
-    this.redis.on('error', () => undefined);
-  }
+  constructor(private readonly client: RedisClient) {}
 
-  async onModuleDestroy() {
-    await this.redis.quit().catch(() => undefined);
+  private get redis() {
+    return this.client.redis;
   }
 
   private key(hostname: string | undefined, slug: string) {
@@ -56,16 +39,8 @@ export class PublicLinkPageCacheService implements OnModuleDestroy {
     return `${publicCacheKeyPrefix}:host:*:${encodeCachePart(slug)}`;
   }
 
-  private async ensureConnected() {
-    if ((this.redis.status as string) === 'ready') {
-      return true;
-    }
-
-    if (this.redis.status === 'wait' || this.redis.status === 'end') {
-      await this.redis.connect().catch(() => undefined);
-    }
-
-    return (this.redis.status as string) === 'ready';
+  private ensureConnected() {
+    return this.client.ensureConnected();
   }
 
   async get<T>(hostname: string | undefined, slug: string) {
@@ -110,12 +85,37 @@ export class PublicLinkPageCacheService implements OnModuleDestroy {
     }
 
     await this.redis.del(this.key(undefined, slug)).catch(() => undefined);
+    await this.deleteByPattern(this.hostSlugPattern(slug));
+  }
 
+  /** Drops every cached path starting with `prefix` (e.g. a bio's posts). */
+  async invalidatePrefix(prefix: string) {
+    if (!(await this.ensureConnected())) {
+      return;
+    }
+
+    const encoded = encodeCachePart(prefix);
+    await this.deleteByPattern(`${publicCacheKeyPrefix}:default:${encoded}*`);
+    await this.deleteByPattern(`${publicCacheKeyPrefix}:host:*:${encoded}*`);
+  }
+
+  /** Drops every cached page served under a custom domain. */
+  async invalidateHost(hostname: string) {
+    if (!(await this.ensureConnected())) {
+      return;
+    }
+
+    await this.deleteByPattern(
+      `${publicCacheKeyPrefix}:host:${encodeCachePart(normalizeHostname(hostname))}:*`,
+    );
+  }
+
+  private async deleteByPattern(pattern: string) {
     let cursor = '0';
 
     do {
       const [nextCursor, keys] = await this.redis
-        .scan(cursor, 'MATCH', this.hostSlugPattern(slug), 'COUNT', 100)
+        .scan(cursor, 'MATCH', pattern, 'COUNT', 100)
         .catch(() => ['0', []] as [string, string[]]);
 
       if (keys.length) {
