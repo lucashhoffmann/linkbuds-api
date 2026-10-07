@@ -86,7 +86,6 @@ export interface TokenChargeResult {
 export interface PaymentDetails {
   status: 'PAID' | 'PENDING' | 'REFUNDED' | 'FAILED';
   card: { brand: string; last4: string } | null;
-  receiptUrl: string | null;
 }
 
 /** The gateway refused the card or the payer data; message is user-facing. */

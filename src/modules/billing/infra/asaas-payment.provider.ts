@@ -321,7 +321,6 @@ export class AsaasPaymentProvider implements PaymentProvider {
     const payment = await this.request<{
       status?: string;
       deleted?: boolean;
-      transactionReceiptUrl?: string | null;
       creditCard?: {
         creditCardBrand?: string | null;
         creditCardNumber?: string | null;
@@ -348,7 +347,6 @@ export class AsaasPaymentProvider implements PaymentProvider {
               last4: card.creditCardNumber.slice(-4),
             }
           : null,
-      receiptUrl: payment.transactionReceiptUrl ?? null,
     };
   }
 

@@ -182,10 +182,9 @@ describe('Asaas payment details', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('maps status, card and receipt for the receipt view', async () => {
+  it('maps status and card for the receipt view', async () => {
     respond({
       status: 'CONFIRMED',
-      transactionReceiptUrl: 'https://asaas.test/comprovantes/1',
       creditCard: {
         creditCardBrand: 'MASTERCARD',
         creditCardNumber: '8829',
@@ -195,7 +194,6 @@ describe('Asaas payment details', () => {
     await expect(provider.getPaymentDetails('pay_1')).resolves.toEqual({
       status: 'PAID',
       card: { brand: 'Mastercard', last4: '8829' },
-      receiptUrl: 'https://asaas.test/comprovantes/1',
     });
   });
 

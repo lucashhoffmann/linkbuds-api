@@ -205,7 +205,7 @@ export class BillingService {
 
   /**
    * One history entry with what the payer needs to understand it: plan vs
-   * card fee, installments, card and receipt (live from the gateway; the
+   * card fee, installments, card and status (live from the gateway; the
    * entry still renders if the gateway is unreachable).
    */
   async ledgerEntry(auth: AuthPayload, entryId: string) {
@@ -266,7 +266,8 @@ export class BillingService {
               feeCents: meta.feeCents,
             }
           : null,
-      transactionId: entry.providerReference,
+      // Our id, not the gateway's: the payer never sees who processes it.
+      transactionId: entry.providerReference ? entry.id : null,
       payment,
     };
   }

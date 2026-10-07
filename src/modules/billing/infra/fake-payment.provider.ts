@@ -77,7 +77,6 @@ export class FakePaymentProvider implements PaymentProvider {
     return Promise.resolve({
       status: 'PAID',
       card: { brand: 'Teste', last4: '0000' },
-      receiptUrl: null,
     });
   }
 
