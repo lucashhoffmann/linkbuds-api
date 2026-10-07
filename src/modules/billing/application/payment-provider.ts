@@ -1,7 +1,17 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import type { BillingCycle } from '../domain/entities/subscription.entity';
 
-export const PAYMENT_PROVIDER = Symbol('PAYMENT_PROVIDER');
+export const PAYMENT_PROVIDERS = Symbol('PAYMENT_PROVIDERS');
+
+/**
+ * `active` takes new checkouts (null = checkout disabled). `byName` holds
+ * every configured gateway, so records of a former one (their `provider`
+ * column) keep getting webhooks, cancel, renewals and receipts.
+ */
+export interface PaymentProviders {
+  active: PaymentProvider | null;
+  byName: ReadonlyMap<string, PaymentProvider>;
+}
 
 /** Gateway card fee: `percent`% of the charge + `fixedCents`. */
 export interface CardFee {

@@ -2,7 +2,11 @@ import { Module } from '@nestjs/common';
 import { BillingScheduler } from './application/billing-scheduler';
 import { BillingService } from './application/billing.service';
 import { CouponsService } from './application/coupons.service';
-import { PAYMENT_PROVIDER } from './application/payment-provider';
+import {
+  PAYMENT_PROVIDERS,
+  type PaymentProvider,
+  type PaymentProviders,
+} from './application/payment-provider';
 import { AsaasPaymentProvider } from './infra/asaas-payment.provider';
 import { FakePaymentProvider } from './infra/fake-payment.provider';
 import {
@@ -20,31 +24,43 @@ import { LedgerEntryEntity } from './domain/entities/ledger-entry.entity';
 import { SubscriptionEntity } from './domain/entities/subscription.entity';
 import { WebhookEventEntity } from './domain/entities/webhook-event.entity';
 
-/**
- * BILLING_PROVIDER picks the gateway adapter. Unset = billing disabled
- * (checkout answers BILLING_NOT_CONFIGURED); coupons keep working.
- * Add a real gateway: implement PaymentProvider and map its name here.
- */
-function paymentProviderFactory() {
-  const name = process.env.BILLING_PROVIDER?.trim();
-
+function buildProvider(name: string): PaymentProvider {
   if (name === 'asaas') {
     return AsaasPaymentProvider.fromEnv();
   }
 
   if (name === 'fake') {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('BILLING_PROVIDER=fake is not allowed in production');
+      throw new Error('Billing provider "fake" is not allowed in production');
     }
 
     return new FakePaymentProvider();
   }
 
-  if (name) {
-    throw new Error(`Unknown BILLING_PROVIDER "${name}"`);
-  }
+  throw new Error(`Unknown billing provider "${name}"`);
+}
 
-  return null;
+/**
+ * BILLING_PROVIDER = gateway for new checkouts. Unset = checkout disabled
+ * (BILLING_NOT_CONFIGURED); coupons keep working.
+ * BILLING_LEGACY_PROVIDERS = comma list of former gateways kept configured
+ * until their subscriptions end (webhooks, cancel, renewals, receipts).
+ * Add a real gateway: implement PaymentProvider and map its name above.
+ */
+export function paymentProvidersFactory(): PaymentProviders {
+  const active = process.env.BILLING_PROVIDER?.trim() || null;
+  const legacy = (process.env.BILLING_LEGACY_PROVIDERS ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const byName = new Map(
+    [...new Set([...(active ? [active] : []), ...legacy])].map((name) => [
+      name,
+      buildProvider(name),
+    ]),
+  );
+
+  return { active: active ? byName.get(active)! : null, byName };
 }
 
 @Module({
@@ -69,7 +85,7 @@ function paymentProviderFactory() {
     BillingService,
     BillingScheduler,
     CouponsService,
-    { provide: PAYMENT_PROVIDER, useFactory: paymentProviderFactory },
+    { provide: PAYMENT_PROVIDERS, useFactory: paymentProvidersFactory },
   ],
 })
 export class BillingModule {}

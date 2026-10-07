@@ -117,7 +117,7 @@ export class AsaasPaymentProvider implements PaymentProvider {
 
     if (!apiUrl || !apiKey || !webhookToken || webhookToken.length < 32) {
       throw new Error(
-        'BILLING_PROVIDER=asaas requires ASAAS_API_URL, ASAAS_API_KEY and ASAAS_WEBHOOK_TOKEN (32+ chars)',
+        'Billing provider "asaas" requires ASAAS_API_URL, ASAAS_API_KEY and ASAAS_WEBHOOK_TOKEN (32+ chars)',
       );
     }
 

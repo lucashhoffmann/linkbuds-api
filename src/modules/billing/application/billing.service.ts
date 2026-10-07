@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { IncomingHttpHeaders } from 'node:http';
 import {
   Brackets,
@@ -39,10 +39,11 @@ import { runIdempotent } from './idempotency';
 import {
   type BillingEvent,
   type CardSubscriptionResult,
-  PAYMENT_PROVIDER,
+  PAYMENT_PROVIDERS,
   PaymentDeclinedError,
   type PaymentDetails,
   type PaymentProvider,
+  type PaymentProviders,
 } from './payment-provider';
 
 /** Owed = CHARGE + REFUND - PAYMENT - CREDIT. */
@@ -98,10 +99,19 @@ export class BillingService {
 
   constructor(
     private readonly dataSource: DataSource,
-    @Optional()
-    @Inject(PAYMENT_PROVIDER)
-    private readonly provider: PaymentProvider | null,
+    @Inject(PAYMENT_PROVIDERS)
+    private readonly providers: PaymentProviders,
   ) {}
+
+  /** Gateway for new checkouts. */
+  private get provider() {
+    return this.providers.active;
+  }
+
+  /** Gateway that owns an existing record (may be a former one). */
+  private providerFor(name: string | null) {
+    return (name && this.providers.byName.get(name)) || null;
+  }
 
   private assertOwner(auth: AuthPayload) {
     if (auth.role !== UserRole.OWNER) {
@@ -220,13 +230,10 @@ export class BillingService {
       : null;
     const installmentCount = meta.installmentCount ?? 1;
     let payment: PaymentDetails | null = null;
+    const gateway = this.providerFor(entry.provider);
 
-    if (
-      this.provider &&
-      entry.provider === this.provider.name &&
-      entry.providerReference
-    ) {
-      payment = await this.provider
+    if (gateway && entry.providerReference) {
+      payment = await gateway
         .getPaymentDetails(entry.providerReference)
         .catch((error: unknown) => {
           this.logger.warn(
@@ -471,7 +478,6 @@ export class BillingService {
    */
   async cancel(auth: AuthPayload) {
     this.assertOwner(auth);
-    const provider = this.requireProvider();
     const subscriptions = this.dataSource.getRepository(SubscriptionEntity);
     const subscription = await subscriptions.findOneBy({
       companyId: auth.companyId,
@@ -483,6 +489,12 @@ export class BillingService {
     }
 
     if (subscription.installmentCount === 1) {
+      const provider = this.providerFor(subscription.provider);
+
+      if (!provider) {
+        throw new AppException(ERROR_CODES.BILLING_NOT_CONFIGURED);
+      }
+
       await provider.cancelSubscription(subscription.providerSubscriptionId);
     }
     subscription.cancelAtPeriodEnd = true;
@@ -549,12 +561,12 @@ export class BillingService {
    * token. Refused → PAST_DUE (plan kept for the grace period).
    */
   private async renewInstallmentPlans(now: Date) {
-    const provider = this.provider;
-    if (!provider) return 0;
+    const names = [...this.providers.byName.keys()];
+    if (!names.length) return 0;
 
     const due = await this.dataSource.getRepository(SubscriptionEntity).find({
       where: {
-        provider: provider.name,
+        provider: In(names),
         status: 'ACTIVE',
         cancelAtPeriodEnd: false,
         installmentCount: MoreThan(1),
@@ -568,6 +580,8 @@ export class BillingService {
     let renewed = 0;
 
     for (const subscription of due) {
+      // Renewals stay on the subscription's own gateway (its card token).
+      const provider = this.providerFor(subscription.provider)!;
       const periodStart = subscription.currentPeriodEnd!.toISOString();
       const checkout = await checkouts.save(
         checkouts.create({
@@ -635,12 +649,16 @@ export class BillingService {
     rawBody: Buffer | undefined,
     headers: IncomingHttpHeaders,
   ) {
-    const provider = this.requireProvider();
+    if (!this.providers.byName.size) {
+      throw new AppException(ERROR_CODES.BILLING_NOT_CONFIGURED);
+    }
+
+    // Each gateway (current or former) verifies its own webhooks.
+    const provider = this.providerFor(providerName);
     let event: BillingEvent | null;
 
     try {
-      if (providerName !== provider.name || !rawBody)
-        throw new Error('mismatch');
+      if (!provider || !rawBody) throw new Error('unknown provider or body');
       event = provider.parseWebhook(rawBody, headers);
     } catch {
       throw new AppException(ERROR_CODES.BILLING_WEBHOOK_INVALID);

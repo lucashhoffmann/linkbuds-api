@@ -10,6 +10,7 @@ import {
   In,
   IsNull,
   Repository,
+  SelectQueryBuilder,
 } from 'typeorm';
 import { CompanyDomainEntity } from 'src/modules/company/domain/entities/company-domain.entity';
 import { CompanyEntity } from 'src/modules/company/domain/entities/company.entity';
@@ -519,6 +520,7 @@ export class LinkPageService {
       formSubmissions,
       formDuration,
       formScore,
+      qrCodeViews,
     ] = await Promise.all([
       base
         .clone()
@@ -565,11 +567,20 @@ export class LinkPageService {
         .andWhere('submission.createdAt BETWEEN :from AND :to', range)
         .andWhere('submission.score IS NOT NULL')
         .getRawOne<{ average: string | null; max: string | null }>(),
+      // The share tab's QR code links with ?utm_source=qrcode.
+      base
+        .clone()
+        .andWhere('event.eventType = :eventType', {
+          eventType: AnalyticsEventType.PAGE_VIEW,
+        })
+        .andWhere("event.utmSource = 'qrcode'")
+        .getCount(),
     ]);
 
     return {
       onlineNow,
       pageViews,
+      qrCodeViews,
       uniqueVisitors: Number(uniqueVisitors?.count ?? 0),
       totalClicks,
       clickThroughRate: pageViews ? totalClicks / pageViews : 0,
@@ -1874,57 +1885,86 @@ export class LinkPageService {
       AnalyticsEventType.SOCIAL_CLICK,
       AnalyticsEventType.IMAGE_CLICK,
     ];
-    const base = () =>
+    const base = (window: AnalyticsRange = range) =>
       this.analyticsRepository
         .createQueryBuilder('event')
         .where('event.linkPageId IN (:...pageIds)', { pageIds })
-        .andWhere('event.createdAt BETWEEN :from AND :to', range)
+        .andWhere('event.createdAt BETWEEN :from AND :to', window)
         .setParameters({ pageView: AnalyticsEventType.PAGE_VIEW, clickTypes });
+    const metrics = (qb: SelectQueryBuilder<LinkPageAnalyticsEventEntity>) =>
+      qb
+        .addSelect(
+          'COUNT(*) FILTER (WHERE event.eventType = :pageView)',
+          'pageViews',
+        )
+        .addSelect(
+          'COUNT(DISTINCT event.visitorId) FILTER (WHERE event.eventType = :pageView)',
+          'visitors',
+        )
+        .addSelect(
+          'COUNT(*) FILTER (WHERE event.eventType IN (:...clickTypes))',
+          'clicks',
+        );
+    type MetricRow = { pageViews: string; visitors: string; clicks: string };
+    // Home cards: one bar per day of the window, % vs the window right before.
+    const day = 86_400_000;
+    const span = range.to.getTime() - range.from.getTime();
+    const days = Math.max(1, Math.ceil(span / day));
+    const previousRange = {
+      from: new Date(range.from.getTime() - span),
+      to: range.from,
+    };
+    const dayIndex =
+      'FLOOR(EXTRACT(EPOCH FROM (event.createdAt - :from)) / 86400)';
 
     const [rows, totals] = pageIds.length
       ? await Promise.all([
-          base()
-            .select('event.linkPageId', 'linkPageId')
-            .addSelect(
-              'COUNT(*) FILTER (WHERE event.eventType = :pageView)',
-              'pageViews',
-            )
-            .addSelect(
-              'COUNT(DISTINCT event.visitorId) FILTER (WHERE event.eventType = :pageView)',
-              'visitors',
-            )
-            .addSelect(
-              'COUNT(*) FILTER (WHERE event.eventType IN (:...clickTypes))',
-              'clicks',
-            )
+          metrics(base().select('event.linkPageId', 'linkPageId'))
             .groupBy('event.linkPageId')
-            .getRawMany<{
-              linkPageId: string;
-              pageViews: string;
-              visitors: string;
-              clicks: string;
-            }>(),
-          base()
-            .select(
-              'COUNT(*) FILTER (WHERE event.eventType = :pageView)',
-              'pageViews',
-            )
-            .addSelect(
-              'COUNT(DISTINCT event.visitorId) FILTER (WHERE event.eventType = :pageView)',
-              'visitors',
-            )
-            .addSelect(
-              'COUNT(*) FILTER (WHERE event.eventType IN (:...clickTypes))',
-              'clicks',
-            )
-            .getRawOne<{
-              pageViews: string;
-              visitors: string;
-              clicks: string;
-            }>(),
+            .getRawMany<MetricRow & { linkPageId: string }>(),
+          metrics(base().select([])).getRawOne<MetricRow>(),
         ])
       : [[], undefined];
     const byPage = new Map(rows.map((row) => [row.linkPageId, row]));
+    // Visitors count only on their first day in the window, so bars sum to the total.
+    const firstVisits = base()
+      .select('event.visitorId', 'visitorId')
+      .addSelect(`MIN(${dayIndex})`, 'day')
+      .andWhere('event.eventType = :pageView')
+      .andWhere('event.visitorId IS NOT NULL')
+      .groupBy('event.visitorId');
+    const [dailyRows, newVisitorRows, previous] = pageIds.length
+      ? await Promise.all([
+          metrics(base().select(dayIndex, 'day'))
+            .groupBy(dayIndex)
+            .getRawMany<MetricRow & { day: string }>(),
+          this.analyticsRepository.manager
+            .createQueryBuilder()
+            .select('first.day', 'day')
+            .addSelect('COUNT(*)', 'visitors')
+            .from(`(${firstVisits.getQuery()})`, 'first')
+            .setParameters(firstVisits.getParameters())
+            .groupBy('first.day')
+            .getRawMany<{ day: string; visitors: string }>(),
+          metrics(base(previousRange).select([])).getRawOne<MetricRow>(),
+        ])
+      : [[], [], undefined];
+    const daily = {
+      pageViews: Array.from({ length: days }, () => 0),
+      visitors: Array.from({ length: days }, () => 0),
+      clicks: Array.from({ length: days }, () => 0),
+    };
+    for (const row of dailyRows) {
+      const index = Number(row.day);
+      if (index < 0 || index >= days) continue;
+      daily.pageViews[index] = Number(row.pageViews);
+      daily.clicks[index] = Number(row.clicks);
+    }
+    for (const row of newVisitorRows) {
+      const index = Number(row.day);
+      if (index >= 0 && index < days)
+        daily.visitors[index] = Number(row.visitors);
+    }
     const formIds = pages
       .filter((page) => page.type === LinkPageType.FORM)
       .map((page) => page.id);
@@ -1957,6 +1997,12 @@ export class LinkPageService {
         visitors: Number(totals?.visitors ?? 0),
         clicks: Number(totals?.clicks ?? 0),
       },
+      previousTotals: {
+        pageViews: Number(previous?.pageViews ?? 0),
+        visitors: Number(previous?.visitors ?? 0),
+        clicks: Number(previous?.clicks ?? 0),
+      },
+      daily,
       pages: pages
         .map((page) => {
           const row = byPage.get(page.id);
