@@ -185,4 +185,32 @@ describe('CompanyDomainService', () => {
     });
     expect(publicCache.invalidateHost).toHaveBeenCalledWith('example.com');
   });
+
+  it.each([
+    [CompanyDomainStatus.ACTIVE, true],
+    [CompanyDomainStatus.VERIFIED, true],
+    [CompanyDomainStatus.PENDING, false],
+    [CompanyDomainStatus.FAILED, false],
+  ])('allows on-demand TLS for a %s domain: %s', async (status, allowed) => {
+    const { domainRepository, service } = createService();
+    domainRepository.findOne.mockResolvedValue({
+      hostname: 'example.com',
+      status,
+    });
+
+    await expect(service.isTlsAllowed('Example.COM.')).resolves.toBe(allowed);
+    expect(domainRepository.findOne).toHaveBeenCalledWith({
+      where: { hostname: 'example.com' },
+    });
+  });
+
+  it('denies on-demand TLS for unknown or invalid hosts', async () => {
+    const { domainRepository, service } = createService();
+    domainRepository.findOne.mockResolvedValue(null);
+
+    await expect(service.isTlsAllowed('unknown.com')).resolves.toBe(false);
+    await expect(service.isTlsAllowed('')).resolves.toBe(false);
+    await expect(service.isTlsAllowed('bad_host!.com')).resolves.toBe(false);
+    expect(domainRepository.findOne).toHaveBeenCalledTimes(1);
+  });
 });

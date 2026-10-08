@@ -211,6 +211,22 @@ export class CompanyDomainService {
     return toCompanyDomainResponse(await this.domainRepository.save(domain));
   }
 
+  /** Caddy on-demand TLS `ask`: issue a certificate only for proven domains. */
+  async isTlsAllowed(host: string) {
+    const hostname = normalizeHostname(host);
+
+    if (!isValidHostname(hostname)) {
+      return false;
+    }
+
+    const domain = await this.domainRepository.findOne({ where: { hostname } });
+
+    return (
+      domain?.status === CompanyDomainStatus.VERIFIED ||
+      domain?.status === CompanyDomainStatus.ACTIVE
+    );
+  }
+
   async delete(auth: AuthPayload, id: string) {
     await this.assertCanManage(auth);
     const domain = await this.domainRepository.findOne({

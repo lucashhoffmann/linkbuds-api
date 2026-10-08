@@ -6,10 +6,13 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { GetAuth } from 'src/shared/decorators/get-auth.decorator';
+import { AppException } from 'src/shared/errors/app.exception';
+import { ERROR_CODES } from 'src/shared/errors/error-catalog';
 import { AuthGuard } from 'src/shared/guards/auth.guard';
 import { TransformResponseInterceptor } from 'src/shared/interceptors';
 import { ZodValidationPipe } from 'src/shared/pipes/zod-validation.pipe';
@@ -54,5 +57,20 @@ export class CompanyDomainController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.companyDomainService.delete(auth, id);
+  }
+}
+
+/** Public: Caddy asks before issuing an on-demand certificate (2xx = allowed). */
+@Controller('public/domains')
+export class PublicDomainController {
+  constructor(private readonly companyDomainService: CompanyDomainService) {}
+
+  @Get('tls-check')
+  async tlsCheck(@Query('domain') domain?: string) {
+    if (!(await this.companyDomainService.isTlsAllowed(domain ?? ''))) {
+      throw new AppException(ERROR_CODES.COMPANY_DOMAIN_NOT_FOUND);
+    }
+
+    return { ok: true };
   }
 }

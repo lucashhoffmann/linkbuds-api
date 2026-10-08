@@ -6,7 +6,10 @@ import { CompanyDomainService } from './application/company-domain.service';
 import { DomainVerificationService } from './application/domain-verification.service';
 import { CompanyDomainEntity } from './domain/entities/company-domain.entity';
 import { CompanyEntity } from './domain/entities/company.entity';
-import { CompanyDomainController } from './presentation/company-domain.controller';
+import {
+  CompanyDomainController,
+  PublicDomainController,
+} from './presentation/company-domain.controller';
 import { CompanyController } from './presentation/company.controller';
 import { CompanyService } from './application/company.service';
 
@@ -15,7 +18,11 @@ import { CompanyService } from './application/company.service';
     LinkPageModule,
     TypeOrmModule.forFeature([CompanyEntity, CompanyDomainEntity, UserEntity]),
   ],
-  controllers: [CompanyController, CompanyDomainController],
+  controllers: [
+    CompanyController,
+    CompanyDomainController,
+    PublicDomainController,
+  ],
   providers: [CompanyService, CompanyDomainService, DomainVerificationService],
   exports: [CompanyDomainService],
 })
