@@ -9,6 +9,7 @@ import { CompanyDomainStatus } from '../domain/enums/company-domain-status.enum'
 function createRepositoryMock() {
   return {
     create: jest.fn((value) => value),
+    find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn((value) => Promise.resolve({ id: 'domain-id', ...value })),
     softDelete: jest.fn(),
@@ -212,5 +213,43 @@ describe('CompanyDomainService', () => {
     await expect(service.isTlsAllowed('')).resolves.toBe(false);
     await expect(service.isTlsAllowed('bad_host!.com')).resolves.toBe(false);
     expect(domainRepository.findOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-checks waiting domains in the background and counts activations', async () => {
+    const { domainRepository, service, verificationService } = createService();
+    const now = new Date('2026-10-08T12:00:00Z');
+    domainRepository.find.mockResolvedValue([
+      { hostname: 'ready.com', status: CompanyDomainStatus.PENDING },
+      { hostname: 'waiting.com', status: CompanyDomainStatus.PENDING },
+    ]);
+    verificationService.check.mockImplementation((hostname: string) =>
+      Promise.resolve(
+        hostname === 'ready.com'
+          ? { ownership: true, routing: true }
+          : { ownership: false, routing: false },
+      ),
+    );
+
+    await expect(service.recheckPending(now)).resolves.toEqual({
+      checked: 2,
+      activated: 1,
+    });
+
+    const [{ where }] = domainRepository.find.mock.calls[0];
+    // Only the last 72h: older domains never got DNS and are not polled.
+    expect(where.createdAt.value).toEqual(new Date('2026-10-05T12:00:00Z'));
+    expect(domainRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostname: 'ready.com',
+        status: CompanyDomainStatus.ACTIVE,
+        verifiedAt: expect.any(Date),
+      }),
+    );
+    expect(domainRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostname: 'waiting.com',
+        status: CompanyDomainStatus.PENDING,
+      }),
+    );
   });
 });

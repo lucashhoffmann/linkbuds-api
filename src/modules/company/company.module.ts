@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LinkPageModule } from '../link-page/link-page.module';
 import { UserEntity } from '../user/domain/entities/user.entity';
+import { CompanyDomainScheduler } from './application/company-domain.scheduler';
 import { CompanyDomainService } from './application/company-domain.service';
 import { DomainVerificationService } from './application/domain-verification.service';
 import { CompanyDomainEntity } from './domain/entities/company-domain.entity';
@@ -23,7 +24,12 @@ import { CompanyService } from './application/company.service';
     CompanyDomainController,
     PublicDomainController,
   ],
-  providers: [CompanyService, CompanyDomainService, DomainVerificationService],
+  providers: [
+    CompanyService,
+    CompanyDomainService,
+    CompanyDomainScheduler,
+    DomainVerificationService,
+  ],
   exports: [CompanyDomainService],
 })
 export class CompanyModule {}

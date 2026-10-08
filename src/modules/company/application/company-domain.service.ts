@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { normalizeHostname } from 'src/shared/utils/hostname';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'node:crypto';
-import { QueryFailedError, Repository } from 'typeorm';
+import { In, MoreThan, QueryFailedError, Repository } from 'typeorm';
 import {
   ENTITLEMENT_RELATIONS,
   assertEntitled,
@@ -65,6 +65,10 @@ export function nextDomainStatus(
     ? CompanyDomainStatus.PENDING
     : CompanyDomainStatus.FAILED;
 }
+
+/** Background re-check gives up on domains older than this (DNS never set). */
+export const AUTO_VERIFY_WINDOW_MS = 72 * 60 * 60 * 1000;
+const AUTO_VERIFY_BATCH = 100;
 
 function toCompanyDomainResponse(domain: CompanyDomainEntity) {
   const cnameTarget = getCustomDomainCnameTarget();
@@ -192,6 +196,37 @@ export class CompanyDomainService {
       throw new AppException(ERROR_CODES.COMPANY_DOMAIN_NOT_FOUND);
     }
 
+    return toCompanyDomainResponse(await this.applyCheck(domain));
+  }
+
+  /**
+   * Scheduler: re-check domains still waiting for DNS, so the user does not
+   * have to click "Verificar". Returns how many became ACTIVE.
+   */
+  async recheckPending(now = new Date()) {
+    const domains = await this.domainRepository.find({
+      where: {
+        status: In([
+          CompanyDomainStatus.PENDING,
+          CompanyDomainStatus.VERIFIED,
+          CompanyDomainStatus.FAILED,
+        ]),
+        createdAt: MoreThan(new Date(now.getTime() - AUTO_VERIFY_WINDOW_MS)),
+      },
+      order: { lastCheckedAt: { direction: 'ASC', nulls: 'FIRST' } },
+      take: AUTO_VERIFY_BATCH,
+    });
+    let activated = 0;
+
+    for (const domain of domains) {
+      const saved = await this.applyCheck(domain);
+      if (saved.status === CompanyDomainStatus.ACTIVE) activated += 1;
+    }
+
+    return { checked: domains.length, activated };
+  }
+
+  private async applyCheck(domain: CompanyDomainEntity) {
     const check = await this.verificationService.check(
       domain.hostname,
       domain.verificationToken,
@@ -208,7 +243,7 @@ export class CompanyDomainService {
       await this.publicCache.invalidateHost(domain.hostname);
     }
 
-    return toCompanyDomainResponse(await this.domainRepository.save(domain));
+    return this.domainRepository.save(domain);
   }
 
   /** Caddy on-demand TLS `ask`: issue a certificate only for proven domains. */
