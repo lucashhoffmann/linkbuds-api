@@ -2,6 +2,8 @@ FROM node:22-alpine AS base
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
+# pnpm aborts prune/install without a TTY unless CI is set
+ENV CI=true
 RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
 
 FROM base AS dependencies
@@ -22,9 +24,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/package.json ./package.json
+
+USER node
 
 EXPOSE 3030
 
