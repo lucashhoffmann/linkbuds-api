@@ -84,6 +84,10 @@ export class FakePaymentProvider implements PaymentProvider {
     return Promise.resolve();
   }
 
+  updateSubscription(): Promise<void> {
+    return Promise.resolve();
+  }
+
   parseWebhook(rawBody: Buffer, headers: IncomingHttpHeaders): BillingEvent {
     const received = headers[FAKE_SIGNATURE_HEADER];
     const expected = signFakePayload(rawBody.toString('utf8'));

@@ -57,3 +57,35 @@ export function withCardFee(
 
   return { baseCents, feeCents: totalCents - baseCents, totalCents };
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Mid-period upgrade: the price difference for the days left of the paid
+ * period. Whole days, so a quote shown today still matches when paid today.
+ */
+export function proratedUpgrade(
+  paidBaseCents: number,
+  newBaseCents: number,
+  periodEnd: Date,
+  cycle: BillingCycle,
+  now = new Date(),
+) {
+  const start = new Date(periodEnd);
+  start.setUTCMonth(start.getUTCMonth() - (cycle === 'YEARLY' ? 12 : 1));
+  const periodDays = Math.round(
+    (periodEnd.getTime() - start.getTime()) / DAY_MS,
+  );
+  const daysLeft = Math.min(
+    periodDays,
+    Math.max(0, Math.ceil((periodEnd.getTime() - now.getTime()) / DAY_MS)),
+  );
+
+  return {
+    daysLeft,
+    baseCents: Math.max(
+      0,
+      Math.round(((newBaseCents - paidBaseCents) * daysLeft) / periodDays),
+    ),
+  };
+}

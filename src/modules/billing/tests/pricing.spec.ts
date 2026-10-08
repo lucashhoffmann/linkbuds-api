@@ -1,4 +1,4 @@
-import { priceFor, withCardFee } from '../domain/pricing';
+import { priceFor, proratedUpgrade, withCardFee } from '../domain/pricing';
 
 const free = { id: 'free', priceCents: 0 } as never;
 const agency = { id: 'agency', priceCents: 18000 } as never;
@@ -74,5 +74,73 @@ describe('withCardFee', () => {
       4990,
     );
     expect(withCardFee(0, asaas).totalCents).toBe(0);
+  });
+});
+
+describe('proratedUpgrade', () => {
+  const end = new Date('2026-11-03T12:00:00Z'); // 31-day monthly period
+
+  it('charges the difference for the days left', () => {
+    // 10 days left of 31: (18000 - 11900) * 10 / 31
+    expect(
+      proratedUpgrade(
+        11900,
+        18000,
+        end,
+        'MONTHLY',
+        new Date('2026-10-24T12:00:00Z'),
+      ),
+    ).toEqual({ daysLeft: 10, baseCents: 1968 });
+  });
+
+  it('holds the same total for the whole day', () => {
+    const morning = proratedUpgrade(
+      11900,
+      18000,
+      end,
+      'MONTHLY',
+      new Date('2026-10-24T13:00:00Z'),
+    );
+    const night = proratedUpgrade(
+      11900,
+      18000,
+      end,
+      'MONTHLY',
+      new Date('2026-10-25T11:59:00Z'),
+    );
+    expect(night).toEqual(morning);
+  });
+
+  it('charges the full difference on day one and nothing after the end', () => {
+    expect(
+      proratedUpgrade(
+        11900,
+        18000,
+        end,
+        'MONTHLY',
+        new Date('2026-10-03T12:00:00Z'),
+      ).baseCents,
+    ).toBe(6100);
+    expect(
+      proratedUpgrade(
+        11900,
+        18000,
+        end,
+        'MONTHLY',
+        new Date('2026-11-04T12:00:00Z'),
+      ).baseCents,
+    ).toBe(0);
+  });
+
+  it('never refunds a cheaper plan', () => {
+    expect(
+      proratedUpgrade(
+        18000,
+        11900,
+        end,
+        'MONTHLY',
+        new Date('2026-10-24T12:00:00Z'),
+      ).baseCents,
+    ).toBe(0);
   });
 });

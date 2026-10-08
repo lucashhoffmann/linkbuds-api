@@ -139,6 +139,11 @@ export interface PaymentProvider {
   /** Throws PaymentDeclinedError when refused. Idempotent per `reference`. */
   chargeCardToken(request: TokenChargeRequest): Promise<TokenChargeResult>;
   cancelSubscription(providerSubscriptionId: string): Promise<void>;
+  /** Next charges of a recurring subscription use the new value (plan upgrade). */
+  updateSubscription(
+    providerSubscriptionId: string,
+    change: { amountCents: number; description: string },
+  ): Promise<void>;
   /** null when the gateway does not know the charge. */
   getPaymentDetails(paymentId: string): Promise<PaymentDetails | null>;
   /**

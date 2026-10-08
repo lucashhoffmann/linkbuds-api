@@ -208,3 +208,27 @@ describe('Asaas payment details', () => {
     await expect(provider.getPaymentDetails('pay_1')).resolves.toBeNull();
   });
 });
+
+describe('Asaas subscription upgrade', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('updates the value of the next charges with PUT', async () => {
+    const fetch = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await provider.updateSubscription('sub_1', {
+      amountCents: 18606,
+      description: 'LinkBuds Agência (mensal)',
+    });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('https://asaas.test/v3/subscriptions/sub_1');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(init?.body as string)).toEqual({
+      value: 186.06,
+      description: 'LinkBuds Agência (mensal)',
+      updatePendingPayments: true,
+    });
+  });
+});

@@ -43,6 +43,14 @@ export const subscribeDto = z
   );
 export type SubscribeDto = z.infer<typeof subscribeDto>;
 
+/** Upgrade of the active subscription, charged on its stored card. */
+export const upgradeDto = z.object({
+  planCode: z.string().trim().min(1),
+  /** Prorated total shown to the payer; 0 = upgrade without a charge. */
+  expectedTotalCents: z.number().int().min(0),
+});
+export type UpgradeDto = z.infer<typeof upgradeDto>;
+
 export const redeemCouponDto = z.object({
   code: z
     .string()

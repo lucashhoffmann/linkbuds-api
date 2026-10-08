@@ -124,6 +124,10 @@ export const ERRORS = {
     status: HttpStatus.CONFLICT,
     message: 'Sua conta já tem uma assinatura ativa',
   },
+  BILLING_UPGRADE_UNAVAILABLE: {
+    status: HttpStatus.BAD_REQUEST,
+    message: 'Este plano não é um upgrade da sua assinatura atual',
+  },
   BILLING_QUOTE_CHANGED: {
     status: HttpStatus.CONFLICT,
     message: 'O valor mudou. Confira o novo total antes de pagar.',

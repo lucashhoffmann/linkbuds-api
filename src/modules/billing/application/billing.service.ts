@@ -33,8 +33,8 @@ import {
   SubscriptionEntity,
 } from '../domain/entities/subscription.entity';
 import { WebhookEventEntity } from '../domain/entities/webhook-event.entity';
-import { priceFor, withCardFee } from '../domain/pricing';
-import type { SubscribeDto } from './dto/billing.dto';
+import { priceFor, proratedUpgrade, withCardFee } from '../domain/pricing';
+import type { SubscribeDto, UpgradeDto } from './dto/billing.dto';
 import { runIdempotent } from './idempotency';
 import {
   type BillingEvent,
@@ -56,6 +56,8 @@ const BALANCE_SIGN: Record<LedgerEntryType, 1 | -1> = {
 
 export const MAX_INSTALLMENTS = 12;
 const RENEWAL_GRACE_DAYS = 3;
+/** Gateway minimum for a card charge. */
+const MIN_CHARGE_CENTS = 500;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -76,6 +78,10 @@ export async function downgrade(
       { planId: freePlan.id },
     );
 }
+
+/** Plan price the current period was paid with (fee excluded). */
+const paidBase = (subscription: SubscriptionEntity) =>
+  subscription.amountCents - subscription.feeCents;
 
 /** Explicit end from the provider, else start (or now) + one billing cycle. */
 function periodEnd(
@@ -323,8 +329,220 @@ export class BillingService {
       : Promise.resolve({ percent: 0, fixedCents: 0 });
   }
 
+  /** Company prices; with an active subscription, each upgrade's prorated charge. */
   async companyQuote(auth: AuthPayload) {
-    return this.quote(await this.loadCompany(auth.companyId));
+    const company = await this.loadCompany(auth.companyId);
+    const [result, subscription] = await Promise.all([
+      this.quote(company),
+      this.upgradableSubscription(company.id),
+    ]);
+
+    return {
+      ...result,
+      quotes: await Promise.all(
+        result.quotes.map(async (quote) => ({
+          ...quote,
+          upgrade:
+            subscription &&
+            quote.billingCycle === subscription.billingCycle &&
+            quote.planCode !== subscription.plan.code &&
+            quote.baseCents > paidBase(subscription)
+              ? await this.upgradeOffer(subscription, quote.baseCents)
+              : null,
+        })),
+      ),
+    };
+  }
+
+  /** Active, renewing and with a stored card: what an upgrade can charge. */
+  private async upgradableSubscription(companyId: string) {
+    const subscription = await this.dataSource
+      .getRepository(SubscriptionEntity)
+      .findOne({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          cancelAtPeriodEnd: false,
+          currentPeriodEnd: MoreThan(new Date()),
+          providerCardToken: Not(IsNull()),
+          providerCustomerId: Not(IsNull()),
+          providerSubscriptionId: Not(IsNull()),
+        },
+        relations: { plan: true },
+      });
+
+    return subscription && this.providerFor(subscription.provider)
+      ? subscription
+      : null;
+  }
+
+  /** Prorated price difference + card fee (paid at once) for the days left. */
+  private async upgradeOffer(
+    subscription: SubscriptionEntity,
+    newBaseCents: number,
+  ) {
+    const { daysLeft, baseCents } = proratedUpgrade(
+      paidBase(subscription),
+      newBaseCents,
+      subscription.currentPeriodEnd!,
+      subscription.billingCycle,
+    );
+
+    // ponytail: under the gateway minimum (last few days) the upgrade is free; charge the minimum instead if that adds up.
+    if (baseCents < MIN_CHARGE_CENTS) {
+      return { daysLeft, baseCents: 0, feeCents: 0, totalCents: 0 };
+    }
+
+    const provider = this.providerFor(subscription.provider)!;
+    return { daysLeft, ...withCardFee(baseCents, await provider.cardFee(1)) };
+  }
+
+  /**
+   * Upgrade mid-period: charges the prorated difference on the stored card,
+   * switches the plan now and renews at the new price. Same period end.
+   */
+  upgrade(auth: AuthPayload, dto: UpgradeDto, idempotencyKey?: string) {
+    this.assertOwner(auth);
+
+    if (!idempotencyKey) {
+      throw new AppException(ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED);
+    }
+
+    return runIdempotent(
+      this.dataSource,
+      `upgrade:${auth.companyId}`,
+      idempotencyKey,
+      { planCode: dto.planCode, expectedTotalCents: dto.expectedTotalCents },
+      () => this.applyUpgrade(auth, dto),
+    );
+  }
+
+  private async applyUpgrade(auth: AuthPayload, dto: UpgradeDto) {
+    const company = await this.loadCompany(auth.companyId);
+    const subscription = await this.upgradableSubscription(company.id);
+
+    if (!subscription) {
+      throw new AppException(ERROR_CODES.BILLING_NO_SUBSCRIPTION);
+    }
+
+    const provider = this.providerFor(subscription.provider)!;
+    const plan = await this.dataSource
+      .getRepository(PlanEntity)
+      .findOneBy({ code: dto.planCode, active: true });
+    const newBase = plan
+      ? priceFor(company, plan, subscription.billingCycle)
+      : 0;
+
+    if (
+      !plan ||
+      plan.id === subscription.planId ||
+      newBase <= paidBase(subscription)
+    ) {
+      throw new AppException(ERROR_CODES.BILLING_UPGRADE_UNAVAILABLE);
+    }
+
+    const offer = await this.upgradeOffer(subscription, newBase);
+
+    // The payer confirmed a total on screen: never charge a different one.
+    if (offer.totalCents !== dto.expectedTotalCents) {
+      throw new AppException(ERROR_CODES.BILLING_QUOTE_CHANGED, {
+        details: offer,
+      });
+    }
+
+    let paymentId: string | null = null;
+
+    if (offer.totalCents > 0) {
+      try {
+        const charge = await provider.chargeCardToken({
+          providerCustomerId: subscription.providerCustomerId!,
+          cardToken: subscription.providerCardToken!,
+          amountCents: offer.totalCents,
+          installmentCount: 1,
+          description: `LinkBuds upgrade para ${plan.name}`,
+          // One charge per upgrade and period, even across retries.
+          reference: `upgrade:${subscription.id}:${plan.code}:${subscription.currentPeriodEnd!.toISOString().slice(0, 10)}`,
+        });
+        paymentId = charge.firstPaymentId;
+      } catch (error) {
+        if (error instanceof PaymentDeclinedError) {
+          throw new AppException(ERROR_CODES.BILLING_PAYMENT_DECLINED, {
+            message: error.message,
+          });
+        }
+
+        throw new AppException(ERROR_CODES.BILLING_GATEWAY_ERROR, {
+          cause: error,
+        });
+      }
+    }
+
+    // Next renewals: full price of the new plan, same fee tier as before.
+    const renewal = withCardFee(
+      newBase,
+      await provider.cardFee(subscription.installmentCount),
+    );
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(SubscriptionEntity).update(
+        { id: subscription.id },
+        {
+          planId: plan.id,
+          amountCents: renewal.totalCents,
+          feeCents: renewal.feeCents,
+        },
+      );
+      await manager
+        .getRepository(CompanyEntity)
+        .update({ id: company.id }, { planId: plan.id });
+
+      if (!paymentId) return;
+
+      const base = {
+        companyId: company.id,
+        subscriptionId: subscription.id,
+        amountCents: offer.totalCents,
+        provider: provider.name,
+        providerReference: paymentId,
+        metadata: {
+          planId: plan.id,
+          billingCycle: subscription.billingCycle,
+          installmentCount: 1,
+          feeCents: offer.feeCents,
+        },
+      };
+      await this.appendLedger(manager, {
+        ...base,
+        type: 'CHARGE',
+        description: `Upgrade para ${plan.name} (${offer.daysLeft} dias)`,
+        idempotencyKey: `${provider.name}:${paymentId}:charge`,
+      });
+      await this.appendLedger(manager, {
+        ...base,
+        type: 'PAYMENT',
+        description: 'Pagamento recebido',
+        idempotencyKey: `${provider.name}:${paymentId}:payment`,
+      });
+    });
+
+    // Installment plans are renewed by the job from amountCents; recurring
+    // ones are charged by the gateway, which must learn the new value.
+    if (subscription.installmentCount === 1) {
+      await provider
+        .updateSubscription(subscription.providerSubscriptionId!, {
+          amountCents: renewal.totalCents,
+          description: `LinkBuds ${plan.name} (${subscription.billingCycle === 'YEARLY' ? 'anual' : 'mensal'})`,
+        })
+        // Paid and upgraded already: never fail the payer for this. Logged to fix by hand.
+        .catch((error: unknown) =>
+          this.logger.error(
+            `Subscription ${subscription.id} upgraded to ${plan.code}, but the gateway still renews at the old value`,
+            error instanceof Error ? error.stack : String(error),
+          ),
+        );
+    }
+
+    return { planCode: plan.code, chargedCents: offer.totalCents };
   }
 
   /**

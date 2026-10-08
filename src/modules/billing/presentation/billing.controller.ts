@@ -27,10 +27,12 @@ import {
   redeemCouponDto,
   subscribeDto,
   updateCouponDto,
+  upgradeDto,
   type CreateCouponDto,
   type RedeemCouponDto,
   type SubscribeDto,
   type UpdateCouponDto,
+  type UpgradeDto,
 } from '../application/dto/billing.dto';
 
 /** Payer's IP for the gateway's anti-fraud: first hop behind the proxy. */
@@ -86,6 +88,17 @@ export class BillingController {
       clientIp(request),
       idempotencyKey,
     );
+  }
+
+  /** Mid-period upgrade on the stored card (prorated). */
+  @Post('upgrade')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  upgrade(
+    @GetAuth() auth: AuthPayload,
+    @Body(new ZodValidationPipe(upgradeDto)) dto: UpgradeDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.billingService.upgrade(auth, dto, idempotencyKey);
   }
 
   @Post('cancel')

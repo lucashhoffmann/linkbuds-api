@@ -307,7 +307,7 @@ export class AsaasPaymentProvider implements PaymentProvider {
       }));
 
     if (!paid(charge.status)) {
-      throw new PaymentDeclinedError('Pagamento da renovação não confirmado.');
+      throw new PaymentDeclinedError('Pagamento não confirmado pelo cartão.');
     }
 
     return {
@@ -348,6 +348,18 @@ export class AsaasPaymentProvider implements PaymentProvider {
             }
           : null,
     };
+  }
+
+  async updateSubscription(
+    providerSubscriptionId: string,
+    change: { amountCents: number; description: string },
+  ) {
+    await this.request('PUT', `/subscriptions/${providerSubscriptionId}`, {
+      value: change.amountCents / 100,
+      description: change.description,
+      // A next charge Asaas already generated also takes the new value.
+      updatePendingPayments: true,
+    });
   }
 
   /** Stops renewals; Asaas also drops pending/overdue charges of it. */
