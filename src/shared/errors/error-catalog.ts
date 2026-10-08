@@ -34,6 +34,10 @@ export const ERRORS = {
     status: HttpStatus.FORBIDDEN,
     message: 'Apenas o dono da conta pode gerenciar a equipe',
   },
+  COMPANY_OWNER_REQUIRED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Apenas o dono da conta pode alterar os dados da agência',
+  },
   TEAM_SEAT_LIMIT_REACHED: {
     status: HttpStatus.FORBIDDEN,
     message: 'Limite de usuários do plano atingido',

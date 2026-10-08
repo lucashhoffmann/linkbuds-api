@@ -7,14 +7,16 @@ import { DomainVerificationService } from './application/domain-verification.ser
 import { CompanyDomainEntity } from './domain/entities/company-domain.entity';
 import { CompanyEntity } from './domain/entities/company.entity';
 import { CompanyDomainController } from './presentation/company-domain.controller';
+import { CompanyController } from './presentation/company.controller';
+import { CompanyService } from './application/company.service';
 
 @Module({
   imports: [
     LinkPageModule,
     TypeOrmModule.forFeature([CompanyEntity, CompanyDomainEntity, UserEntity]),
   ],
-  controllers: [CompanyDomainController],
-  providers: [CompanyDomainService, DomainVerificationService],
+  controllers: [CompanyController, CompanyDomainController],
+  providers: [CompanyService, CompanyDomainService, DomainVerificationService],
   exports: [CompanyDomainService],
 })
 export class CompanyModule {}
