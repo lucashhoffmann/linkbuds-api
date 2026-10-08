@@ -206,6 +206,11 @@ export const ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'LinkPage não encontrada',
   },
+  /** Host is a customer domain, but its agency page is inactive/missing. */
+  LINK_PAGE_DOMAIN_HOME_UNAVAILABLE: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Página indisponível neste domínio',
+  },
   LINK_PAGE_PLAN_REQUIRED: {
     status: HttpStatus.FORBIDDEN,
     message: 'Empresa sem plano ativo',

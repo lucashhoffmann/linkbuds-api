@@ -1104,4 +1104,30 @@ describe('LinkPageService', () => {
       errorCode: ERROR_CODES.LINK_PAGE_CHILD_NOT_FOUND,
     });
   });
+
+  describe('resolveDomainHome', () => {
+    it('is a plain not-found when the host is not a customer domain', async () => {
+      const { domainRepository, service } = createService();
+      domainRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.resolveDomainHome('app.linkbuds.com.br'),
+      ).rejects.toMatchObject({ errorCode: ERROR_CODES.LINK_PAGE_NOT_FOUND });
+    });
+
+    it('flags a customer domain whose agency page is inactive', async () => {
+      const { domainRepository, linkPageRepository, service } = createService();
+      domainRepository.findOne.mockResolvedValue({
+        companyId: 'company-id',
+        hostname: 'example.com',
+      });
+      linkPageRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.resolveDomainHome('Example.com'),
+      ).rejects.toMatchObject({
+        errorCode: ERROR_CODES.LINK_PAGE_DOMAIN_HOME_UNAVAILABLE,
+      });
+    });
+  });
 });

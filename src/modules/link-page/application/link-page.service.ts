@@ -2270,8 +2270,13 @@ export class LinkPageService {
         })
       : null;
 
-    if (!page) {
+    if (!domain) {
       throw new AppException(ERROR_CODES.LINK_PAGE_NOT_FOUND);
+    }
+
+    // Customer domain: the front must show "unavailable", never the app login.
+    if (!page) {
+      throw new AppException(ERROR_CODES.LINK_PAGE_DOMAIN_HOME_UNAVAILABLE);
     }
 
     return this.resolvePublic(normalizedHostname, page.slug);
