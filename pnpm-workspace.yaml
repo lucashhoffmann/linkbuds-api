@@ -1,5 +1,5 @@
 packages:
-  - "."
+  - '.'
 allowBuilds:
   argon2: true
   unrs-resolver: true

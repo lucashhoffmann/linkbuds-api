@@ -20,7 +20,11 @@ export class LinkPageLinkShape1790000000030 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "link_page_links" DROP COLUMN "full_width"`,
     );
-    await queryRunner.query(`ALTER TABLE "link_page_links" DROP COLUMN "align"`);
-    await queryRunner.query(`ALTER TABLE "link_page_links" DROP COLUMN "shape"`);
+    await queryRunner.query(
+      `ALTER TABLE "link_page_links" DROP COLUMN "align"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "link_page_links" DROP COLUMN "shape"`,
+    );
   }
 }
